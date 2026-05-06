@@ -1,0 +1,43 @@
+[package]
+name = "lumen-core"
+version = "0.1.0"
+description = "LLM usage monitor daemon — proxy, parser, pricing, and JSON API"
+authors = ["DataGrout"]
+edition = "2021"
+
+[[bin]]
+name = "lumen-core"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server-auto"] }
+http-body-util = "0.1"
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "stream", "http2"] }
+tokio-stream = "0.1"
+futures-util = "0.3"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4"] }
+rcgen = "0.13"
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+hex = "0.4"
+flate2 = "1"
+libc = "0.2"
+sha2 = "0.10"
+rand = "0.8"
+pcap = { version = "2", features = ["capture-stream"] }
+etherparse = "0.16"
+
+[dev-dependencies]
+nix = { version = "0.29", features = ["signal"] }
+tempfile = "3"
+filetime = "0.2"

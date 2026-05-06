@@ -1,0 +1,33 @@
+# Rust
+lumen-core/target/
+**/*.rs.bk
+
+# Swift
+Lumen/.build/
+Lumen/.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local dev / internal
+.claude/
+.cursor/
+benchmarks/
+
+# Distribution artifacts (shared externally, not via git)
+dist/
+*.dmg
+
+# Python
+__pycache__/
+*.pyc
