@@ -4,6 +4,8 @@
 
 **Real-time LLM usage monitor and cost tracker** -- a native macOS status bar app by [DataGrout](https://datagrout.ai).
 
+![Lumen screenshot](docs/screenshot.png)
+
 Lumen intercepts LLM API traffic, extracts token usage and cost metadata, and displays it in a live gauge interface from your menu bar. Think of it like Activity Monitor for your AI spending.
 
 ## Architecture
