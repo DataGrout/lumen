@@ -321,6 +321,11 @@ impl Aggregator {
         events.iter().rev().take(limit).cloned().collect()
     }
 
+    /// Total number of usage events recorded since startup (monotonically increasing).
+    pub fn total_event_count(&self) -> u64 {
+        self.lifetime_stats.read().event_count
+    }
+
     pub fn clear(&self) {
         self.events.write().clear();
         *self.lifetime_stats.write() = LifetimeStats::default();
@@ -485,5 +490,21 @@ mod tests {
         let stats = agg.compute_stats();
         assert_eq!(stats.total_cost, cost_before);
         assert_eq!(stats.total_input_tokens, 500);
+    }
+
+    #[test]
+    fn test_total_event_count_is_lifetime() {
+        let agg = Aggregator::default();
+        assert_eq!(agg.total_event_count(), 0);
+
+        record_n(&agg, 5, "gpt-4o");
+        assert_eq!(agg.total_event_count(), 5);
+
+        // create_lap resets the session window but must not affect the lifetime counter
+        agg.create_lap(None);
+        assert_eq!(agg.total_event_count(), 5);
+
+        record_n(&agg, 3, "gpt-4o");
+        assert_eq!(agg.total_event_count(), 8);
     }
 }

@@ -58,7 +58,7 @@ struct WizardView: View {
         .frame(width: 460, height: 520)
         .onAppear {
             checkCATrust()
-            Task.detached(priority: .utility) {
+            Task(priority: .utility) {
                 let ids = Set(buildAIToolDefs().filter { checkInstalled($0) }.map(\.id))
                 await MainActor.run { installedTools = ids }
             }

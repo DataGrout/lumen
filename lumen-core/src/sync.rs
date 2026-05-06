@@ -78,7 +78,7 @@ pub struct DGSyncer {
     sync_token: Arc<RwLock<Option<String>>>,
     /// Conduit sub_id of the registered device.
     lumen_sub_id: Arc<RwLock<Option<String>>>,
-    last_synced_count: RwLock<usize>,
+    last_synced_count: RwLock<u64>,
 }
 
 impl DGSyncer {
@@ -97,7 +97,7 @@ impl DGSyncer {
             bearer_token,
             sync_token,
             lumen_sub_id,
-            last_synced_count: RwLock::new(0),
+            last_synced_count: RwLock::new(0u64),
         }
     }
 
@@ -133,17 +133,22 @@ impl DGSyncer {
             }
         };
 
-        let events = self.aggregator.recent_events(MAX_BATCH_SIZE);
-        let current_count = events.len();
+        let total = self.aggregator.total_event_count();
         let last = *self.last_synced_count.read();
 
-        if current_count <= last {
+        if total <= last {
             return Ok(());
         }
 
-        let new_events: Vec<SyncEvent> = events[..current_count.saturating_sub(last)]
-            .iter()
-            .map(SyncEvent::from)
+        // Fetch the newest (total - last) events, capped at MAX_BATCH_SIZE.
+        // recent_events returns newest-first; reverse to send oldest-first.
+        let to_fetch = ((total - last) as usize).min(MAX_BATCH_SIZE);
+        let new_events: Vec<SyncEvent> = self
+            .aggregator
+            .recent_events(to_fetch)
+            .into_iter()
+            .rev()
+            .map(|e| SyncEvent::from(&e))
             .collect();
 
         if new_events.is_empty() {
@@ -189,7 +194,7 @@ impl DGSyncer {
         match req.send().await {
             Ok(resp) if resp.status().is_success() => {
                 let count = batch.events.len();
-                *self.last_synced_count.write() = current_count;
+                *self.last_synced_count.write() = last + count as u64;
                 info!("Synced {} usage events to {}", count, url);
                 Ok(())
             }
@@ -254,5 +259,53 @@ mod tests {
         let sync_token: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let sub_id: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let _syncer = DGSyncer::new(aggregator, url, client, token, sync_token, sub_id);
+    }
+
+    fn make_syncer(aggregator: Arc<Aggregator>) -> DGSyncer {
+        DGSyncer::new(
+            aggregator,
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(reqwest::Client::new())),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_sync_skips_without_server_url() {
+        let pricing = PricingDatabase::with_defaults();
+        let aggregator = Arc::new(Aggregator::new(pricing));
+
+        let usage = crate::parser::TokenUsage {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        };
+        aggregator.record_usage(
+            crate::parser::LLMProvider::OpenAI,
+            "gpt-4o",
+            "https://api.openai.com/v1/chat/completions",
+            usage,
+        );
+
+        let syncer = make_syncer(aggregator);
+        // No server_url set — sync_batch must return Ok without touching HTTP
+        assert!(syncer.sync_batch().await.is_ok());
+        // Watermark must not advance (no sync happened)
+        assert_eq!(*syncer.last_synced_count.read(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_sync_watermark_does_not_advance_when_no_new_events() {
+        let pricing = PricingDatabase::with_defaults();
+        let aggregator = Arc::new(Aggregator::new(pricing));
+        let syncer = make_syncer(aggregator);
+
+        // total == last (both 0) → early return, watermark stays at 0
+        assert!(syncer.sync_batch().await.is_ok());
+        assert_eq!(*syncer.last_synced_count.read(), 0);
     }
 }

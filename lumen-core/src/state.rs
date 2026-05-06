@@ -4,6 +4,53 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+/// Loads the API token from `~/.lumen/api.token`, or generates and persists a new one.
+/// The file is written with 0600 permissions so only the owning user can read it.
+pub fn load_or_create_api_token() -> String {
+    let Some(home) = std::env::var("HOME").ok() else {
+        return ephemeral_token();
+    };
+    let path = std::path::PathBuf::from(home)
+        .join(".lumen")
+        .join("api.token");
+
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let t = existing.trim().to_string();
+        if t.len() == 64 && t.chars().all(|c| c.is_ascii_hexdigit()) {
+            return t;
+        }
+    }
+
+    let token = ephemeral_token();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .and_then(|mut f| f.write_all(token.as_bytes()));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::write(&path, &token);
+    }
+    token
+}
+
+fn ephemeral_token() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
 pub fn dg_config_path() -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
     Some(
@@ -155,6 +202,7 @@ pub struct DcrFlow {
 }
 
 pub struct AppState {
+    pub api_token: String,
     pub aggregator: Arc<Aggregator>,
     pub proxy: RwLock<Option<Arc<LumenProxy>>>,
     pub proxy_config: RwLock<ProxyConfig>,
@@ -210,6 +258,7 @@ impl AppState {
         let dg_lumen_sub_id = identity.as_ref().and_then(|id| id.sub_id.clone());
 
         Self {
+            api_token: load_or_create_api_token(),
             aggregator,
             proxy: RwLock::new(None),
             proxy_config: RwLock::new(ProxyConfig::default()),

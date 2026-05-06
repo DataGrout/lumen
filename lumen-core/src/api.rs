@@ -69,6 +69,26 @@ async fn handle_api_request(
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
 
+    // Authenticate every request except the OAuth browser redirect (can't send custom headers)
+    // and the health probe (used by DaemonManager without a token).
+    let auth_exempt = matches!(
+        (method.as_str(), path.as_str()),
+        ("GET", "/health") | ("GET", "/dg/oauth/callback")
+    );
+    if !auth_exempt {
+        let provided = req
+            .headers()
+            .get("x-lumen-token")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if provided != state.api_token {
+            return Ok(json_response(
+                StatusCode::UNAUTHORIZED,
+                &serde_json::json!({"error": "unauthorized"}),
+            ));
+        }
+    }
+
     let response = match (method, path.as_str()) {
         (Method::GET, "/stats") => {
             let stats = state.aggregator.compute_stats();
@@ -945,7 +965,6 @@ fn json_response<T: serde::Serialize>(status: StatusCode, body: &T) -> Response<
     Response::builder()
         .status(status)
         .header("Content-Type", "application/json")
-        .header("Access-Control-Allow-Origin", "*")
         .body(Full::new(Bytes::from(json)))
         .unwrap()
 }

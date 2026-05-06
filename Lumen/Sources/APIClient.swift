@@ -235,6 +235,12 @@ final class APIClient {
     private let baseURL = "http://127.0.0.1:9091"
     private var pollTimer: Timer?
     private var lastTrafficRevision: UInt64 = 0
+    private let apiToken: String? = {
+        let path = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".lumen/api.token")
+        return try? String(contentsOf: path, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }()
 
     init() {
         startPolling()
@@ -453,6 +459,7 @@ final class APIClient {
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
         req.timeoutInterval = 10
+        if let token = apiToken { req.setValue(token, forHTTPHeaderField: "X-Lumen-Token") }
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
             let ok = (resp as? HTTPURLResponse)?.statusCode == 200
@@ -501,8 +508,10 @@ final class APIClient {
 
     private func get(_ path: String) async -> Data? {
         guard let url = URL(string: baseURL + path) else { return nil }
+        var req = URLRequest(url: url)
+        if let token = apiToken { req.setValue(token, forHTTPHeaderField: "X-Lumen-Token") }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await URLSession.shared.data(for: req)
             return data
         } catch {
             return nil
@@ -526,6 +535,7 @@ final class APIClient {
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = apiToken { req.setValue(token, forHTTPHeaderField: "X-Lumen-Token") }
         req.httpBody = body
         do {
             let (data, _) = try await URLSession.shared.data(for: req)

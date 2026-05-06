@@ -40,7 +40,7 @@ Two processes, zero npm dependencies:
 - **Endpoint monitoring** -- See exactly which URLs are intercepted and what data is captured
 - **Custom endpoints** -- Whitelist additional hosts (local LLMs, hosted models, MCP servers)
 - **DataGrout integration** -- Toggle DG tools visibility and Intelligent Interface
-- **Privacy-first** -- Only token counts and pricing metadata are captured; message content is never stored
+- **Privacy-first** -- In normal operation, only token counts and pricing metadata are captured; message content is never stored or transmitted. An opt-in debug capture mode (`POST /api/debug/arm`) can temporarily buffer raw request/response payloads in memory for diagnostics — it is off by default and payloads are cleared on disarm.
 
 ## Prerequisites
 

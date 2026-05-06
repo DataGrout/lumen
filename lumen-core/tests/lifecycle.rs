@@ -35,7 +35,7 @@ fn find_binary() -> String {
 
 struct DaemonGuard {
     child: Option<Child>,
-    _home: TempDir,
+    home: TempDir,
 }
 
 impl DaemonGuard {
@@ -57,8 +57,24 @@ impl DaemonGuard {
 
         DaemonGuard {
             child: Some(child),
-            _home: temp_home,
+            home: temp_home,
         }
+    }
+
+    /// Read the API token written by the daemon to <home>/.lumen/api.token.
+    /// Retries for up to 3 seconds to handle startup latency.
+    fn token(&self) -> String {
+        let path = self.home.path().join(".lumen").join("api.token");
+        for _ in 0..60 {
+            if let Ok(t) = std::fs::read_to_string(&path) {
+                let t = t.trim().to_string();
+                if t.len() == 64 {
+                    return t;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("api.token not found at {:?} after 3 s", path);
     }
 
     fn pid(&self) -> u32 {
@@ -101,6 +117,19 @@ impl Drop for DaemonGuard {
             let _ = child.wait();
         }
     }
+}
+
+/// Build a reqwest client that sends the API token on every request.
+fn authed_client(token: &str) -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "x-lumen-token",
+        reqwest::header::HeaderValue::from_str(token).expect("token is valid header value"),
+    );
+    reqwest::ClientBuilder::new()
+        .default_headers(headers)
+        .build()
+        .expect("client build failed")
 }
 
 fn ephemeral_ports() -> (u16, u16) {
@@ -163,7 +192,7 @@ async fn test_graceful_shutdown() {
         "Daemon failed to become healthy"
     );
 
-    let client = reqwest::Client::new();
+    let client = authed_client(&daemon.token());
     let resp = client
         .post(format!("http://127.0.0.1:{}/shutdown", api_port))
         .send()
@@ -189,7 +218,7 @@ async fn test_port_cleanup_after_shutdown() {
 
     assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
 
-    let client = reqwest::Client::new();
+    let client = authed_client(&daemon.token());
     client
         .post(format!("http://127.0.0.1:{}/shutdown", api_port))
         .send()
@@ -242,10 +271,13 @@ async fn test_sigterm_handling() {
 #[tokio::test]
 async fn test_stats_endpoint() {
     let (api_port, proxy_port) = ephemeral_ports();
-    let _daemon = DaemonGuard::new(api_port, proxy_port);
+    let daemon = DaemonGuard::new(api_port, proxy_port);
     assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
 
-    let resp = reqwest::get(format!("http://127.0.0.1:{}/stats", api_port))
+    let client = authed_client(&daemon.token());
+    let resp = client
+        .get(format!("http://127.0.0.1:{}/stats", api_port))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -259,10 +291,10 @@ async fn test_stats_endpoint() {
 #[tokio::test]
 async fn test_lap_endpoints() {
     let (api_port, proxy_port) = ephemeral_ports();
-    let _daemon = DaemonGuard::new(api_port, proxy_port);
+    let daemon = DaemonGuard::new(api_port, proxy_port);
     assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
 
-    let client = reqwest::Client::new();
+    let client = authed_client(&daemon.token());
 
     let resp = client
         .post(format!("http://127.0.0.1:{}/lap", api_port))
@@ -287,14 +319,18 @@ async fn test_lap_endpoints() {
     assert_eq!(snap["lap_number"], 2);
     assert_eq!(snap["label"], "Lap 2");
 
-    let resp = reqwest::get(format!("http://127.0.0.1:{}/laps", api_port))
+    let resp = client
+        .get(format!("http://127.0.0.1:{}/laps", api_port))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
     let laps: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(laps.len(), 2);
 
-    let stats: serde_json::Value = reqwest::get(format!("http://127.0.0.1:{}/stats", api_port))
+    let stats: serde_json::Value = client
+        .get(format!("http://127.0.0.1:{}/stats", api_port))
+        .send()
         .await
         .unwrap()
         .json()
@@ -306,17 +342,23 @@ async fn test_lap_endpoints() {
 #[tokio::test]
 async fn test_traffic_endpoints() {
     let (api_port, proxy_port) = ephemeral_ports();
-    let _daemon = DaemonGuard::new(api_port, proxy_port);
+    let daemon = DaemonGuard::new(api_port, proxy_port);
     assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
 
-    let resp = reqwest::get(format!("http://127.0.0.1:{}/traffic", api_port))
+    let client = authed_client(&daemon.token());
+
+    let resp = client
+        .get(format!("http://127.0.0.1:{}/traffic", api_port))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert!(entries.is_empty());
 
-    let resp = reqwest::get(format!("http://127.0.0.1:{}/traffic/hosts", api_port))
+    let resp = client
+        .get(format!("http://127.0.0.1:{}/traffic/hosts", api_port))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -327,12 +369,14 @@ async fn test_traffic_endpoints() {
 #[tokio::test]
 async fn test_config_endpoints() {
     let (api_port, proxy_port) = ephemeral_ports();
-    let _daemon = DaemonGuard::new(api_port, proxy_port);
+    let daemon = DaemonGuard::new(api_port, proxy_port);
     assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
 
-    let client = reqwest::Client::new();
+    let client = authed_client(&daemon.token());
 
-    let resp = reqwest::get(format!("http://127.0.0.1:{}/config", api_port))
+    let resp = client
+        .get(format!("http://127.0.0.1:{}/config", api_port))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -362,10 +406,13 @@ async fn test_config_endpoints() {
 #[tokio::test]
 async fn test_unknown_route_404() {
     let (api_port, proxy_port) = ephemeral_ports();
-    let _daemon = DaemonGuard::new(api_port, proxy_port);
+    let daemon = DaemonGuard::new(api_port, proxy_port);
     assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
 
-    let resp = reqwest::get(format!("http://127.0.0.1:{}/nonexistent", api_port))
+    let client = authed_client(&daemon.token());
+    let resp = client
+        .get(format!("http://127.0.0.1:{}/nonexistent", api_port))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
@@ -374,13 +421,15 @@ async fn test_unknown_route_404() {
 #[tokio::test]
 async fn test_routes_api() {
     let (api_port, proxy_port) = ephemeral_ports();
-    let _daemon = DaemonGuard::new(api_port, proxy_port);
+    let daemon = DaemonGuard::new(api_port, proxy_port);
     assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
 
-    let client = reqwest::Client::new();
+    let client = authed_client(&daemon.token());
 
     // Default routes should include openai, anthropic, google
-    let resp = reqwest::get(format!("http://127.0.0.1:{}/routes", api_port))
+    let resp = client
+        .get(format!("http://127.0.0.1:{}/routes", api_port))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -428,14 +477,14 @@ async fn test_relay_no_route_returns_404() {
 #[tokio::test]
 async fn test_relay_openai_forwards() {
     let (api_port, proxy_port) = ephemeral_ports();
-    let _daemon = DaemonGuard::new(api_port, proxy_port);
+    let daemon = DaemonGuard::new(api_port, proxy_port);
     assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
 
-    // Send a request to the /openai relay route
+    // Send a request to the /openai relay route (proxy port — no auth required)
     // This will fail upstream (no valid API key) but should get a proper HTTP error,
     // not a 404 — proving the relay resolved and forwarded
-    let client = reqwest::Client::new();
-    let resp = client
+    let plain = reqwest::Client::new();
+    let resp = plain
         .post(format!(
             "http://127.0.0.1:{}/openai/v1/chat/completions",
             proxy_port
@@ -456,15 +505,17 @@ async fn test_relay_openai_forwards() {
         status
     );
 
-    // Verify traffic was logged
+    // Verify traffic was logged (API port — requires token)
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let traffic: Vec<serde_json::Value> =
-        reqwest::get(format!("http://127.0.0.1:{}/traffic", api_port))
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+    let client = authed_client(&daemon.token());
+    let traffic: Vec<serde_json::Value> = client
+        .get(format!("http://127.0.0.1:{}/traffic", api_port))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert!(
         !traffic.is_empty(),
         "Traffic log should have the relayed request"
