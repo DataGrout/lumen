@@ -103,10 +103,12 @@ pub struct LumenProxy {
 }
 
 /// Returns true when a Cursor call is large enough to represent real AI inference.
-/// BidiAppend heartbeats are tiny protocol frames (48-56B); real content is 200B+.
 fn cursor_is_significant_call(path: &str, req_bytes: u64, resp_bytes: u64) -> bool {
     if path.contains("BidiAppend") {
-        req_bytes >= 200 || resp_bytes > 200
+        // BidiAppend with no response is Cursor's background context sync (uploads the
+        // current codebase snapshot every ~1 second). These can be 100-200KB but produce
+        // zero response bytes. Real AI completions always return a non-trivial response.
+        resp_bytes > 50
     } else {
         req_bytes > 50 || resp_bytes > 200
     }
@@ -135,6 +137,7 @@ fn is_cursor_noise(host: &str, path: &str) -> bool {
         "RepositoryService",
         "ReportClient",
         "ReportProcess",
+        "ReportAiCodeChangeMetrics",
         "/envelope/",
         "GetAccessToken",
         "GetAuthToken",
@@ -1275,6 +1278,32 @@ mod tests {
         let proxy = test_proxy();
         // "/openaiextended" should NOT match "/openai"
         assert!(proxy.resolve_relay("/openaiextended/foo").is_none());
+    }
+
+    #[test]
+    fn test_cursor_is_significant_call() {
+        // BidiAppend background sync: large request, zero response -> not significant
+        assert!(!cursor_is_significant_call("/BidiService/BidiAppend", 195050, 0));
+        // BidiAppend small heartbeat, zero response -> not significant
+        assert!(!cursor_is_significant_call("/BidiService/BidiAppend", 80, 0));
+        // BidiAppend with a real response -> significant
+        assert!(cursor_is_significant_call("/BidiService/BidiAppend", 100, 200));
+        // Non-BidiAppend path with small request -> not significant
+        assert!(!cursor_is_significant_call("/AgentService/Run", 30, 0));
+        // Non-BidiAppend path with meaningful request -> significant
+        assert!(cursor_is_significant_call("/AgentService/Run", 200, 0));
+        // Non-BidiAppend path with meaningful response -> significant
+        assert!(cursor_is_significant_call("/AgentService/Run", 10, 300));
+    }
+
+    #[test]
+    fn test_cursor_is_noise() {
+        assert!(is_cursor_noise("metrics.cursor.sh", "/anything"));
+        assert!(is_cursor_noise("api2.cursor.sh", "/AnalyticsService/Batch"));
+        assert!(is_cursor_noise("api2.cursor.sh", "/ReportAiCodeChangeMetrics"));
+        assert!(is_cursor_noise("api2.cursor.sh", "/tev1/track"));
+        assert!(!is_cursor_noise("api2.cursor.sh", "/aiserver.v1.AiService/RunSSE"));
+        assert!(!is_cursor_noise("api2.cursor.sh", "/BidiService/BidiAppend"));
     }
 
     #[test]

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] — 2026-05-07
+
+### Fixed
+
+- **Cursor BidiAppend over-estimation** — `BidiAppend` calls with no response body are now correctly identified as Cursor's background context-sync traffic and excluded from usage tracking. Previously, Cursor's ~195KB codebase-snapshot uploads (sent every ~1 second before any AI call) were each estimated as ~49,000-input-token AI completions, inflating cost estimates by orders of magnitude. The fix requires a non-trivial response (`resp_bytes > 50`) before a BidiAppend call is treated as AI inference — real AI completions always produce output.
+- **`ReportAiCodeChangeMetrics` telemetry** — added to the Cursor noise-path list so these background reports don't generate usage events.
+
+### Tests
+
+- `proxy::test_cursor_is_significant_call` — verifies BidiAppend calls with 0B response are not counted as AI inference.
+- `proxy::test_cursor_is_noise` — verifies `ReportAiCodeChangeMetrics` and other known-telemetry paths are excluded.
+
+---
+
 ## [0.1.1] — 2026-05-06
 
 ### Fixed
