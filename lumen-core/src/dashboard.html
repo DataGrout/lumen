@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lumen Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --border: #1e1e2e;
+    --text: #e0e0f0;
+    --muted: #5a5a7a;
+    --green: #00ff88;
+    --yellow: #ffcc00;
+    --red: #ff4455;
+    --blue: #4488ff;
+    --purple: #aa44ff;
+    --accent: #00ccff;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    display: inline-block;
+    margin-right: 6px;
+    transition: background 0.3s;
+  }
+  #status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+  }
+
+  .card-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .card-value {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text);
+  }
+
+  .card-sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  .card-value.green  { color: var(--green); }
+  .card-value.yellow { color: var(--yellow); }
+  .card-value.red    { color: var(--red); }
+
+  /* Bar gauge */
+  .gauge-wrap {
+    margin-top: 6px;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .gauge-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.4s ease, background 0.4s;
+  }
+
+  /* Section headers */
+  .section-header {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Event feed */
+  #event-feed {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    height: 280px;
+    overflow-y: auto;
+    font-size: 12px;
+    margin-bottom: 14px;
+  }
+
+  #event-feed::-webkit-scrollbar { width: 4px; }
+  #event-feed::-webkit-scrollbar-track { background: transparent; }
+  #event-feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .event-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 80px 70px 70px;
+    gap: 8px;
+    align-items: center;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+  }
+  .event-row:hover { background: #ffffff08; }
+  .event-row:last-child { border-bottom: none; }
+
+  .ev-time  { color: var(--muted); font-size: 11px; }
+  .ev-model { color: var(--blue); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev-tokens { color: var(--text); text-align: right; }
+  .ev-cost  { color: var(--green); text-align: right; }
+  .ev-cache { text-align: right; }
+
+  .badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .badge-openai    { background: #10a37f22; color: #10a37f; }
+  .badge-anthropic { background: #cc785122; color: #cc7851; }
+  .badge-google    { background: #4285f422; color: #4285f4; }
+  .badge-cursor    { background: #aa44ff22; color: #aa44ff; }
+  .badge-other     { background: #ffffff15; color: var(--muted); }
+
+  /* Lap table */
+  #lap-section { margin-bottom: 14px; }
+
+  #lap-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  #lap-table th {
+    text-align: left;
+    padding: 5px 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  #lap-table th:not(:first-child),
+  #lap-table td:not(:first-child) { text-align: right; }
+
+  #lap-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  #lap-table tbody tr:hover { background: #ffffff06; }
+  #lap-table tbody tr:last-child td { border-bottom: none; }
+
+  .lap-cost   { color: var(--green); }
+  .lap-saving { color: var(--yellow); }
+
+  /* Footer */
+  footer {
+    font-size: 10px;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 8px;
+    letter-spacing: 0.05em;
+  }
+
+  .empty-state {
+    padding: 40px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* Sparkline */
+  canvas#sparkline {
+    display: block;
+    width: 100%;
+    height: 32px;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header>
+  <h1>⬡ Lumen</h1>
+  <span><span id="status-dot"></span><span id="status-text" style="color:var(--muted);font-size:11px">connecting…</span></span>
+</header>
+
+<!-- Stat cards -->
+<div class="grid" id="stat-cards">
+  <div class="card">
+    <div class="card-label">Session Cost</div>
+    <div class="card-value" id="session-cost">—</div>
+    <div class="card-sub" id="session-tokens">— tokens</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Total Cost</div>
+    <div class="card-value" id="total-cost">—</div>
+    <div class="card-sub" id="total-tokens">— tokens</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Cache Savings</div>
+    <div class="card-value yellow" id="cache-savings">—</div>
+    <div class="gauge-wrap"><div class="gauge-fill" id="cache-gauge" style="width:0%;background:var(--yellow)"></div></div>
+  </div>
+  <div class="card">
+    <div class="card-label">Token Rate</div>
+    <div class="card-value" id="token-rate">—</div>
+    <div class="card-sub">tokens / min</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Top Model</div>
+    <div class="card-value" id="top-model" style="font-size:13px;padding-top:4px">—</div>
+    <div class="card-sub" id="top-provider">—</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Events</div>
+    <div class="card-value" id="event-count">—</div>
+    <div class="card-sub" id="lap-label">lap 1</div>
+  </div>
+</div>
+
+<!-- Event feed -->
+<div class="section-header">Recent Events</div>
+<div id="event-feed">
+  <div class="empty-state" id="feed-empty">No events yet — start proxying traffic.</div>
+</div>
+
+<!-- Lap table -->
+<div id="lap-section" style="display:none">
+  <div class="section-header">Benchmark Laps</div>
+  <table id="lap-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Label</th>
+        <th>Duration</th>
+        <th>Tokens</th>
+        <th>Cost</th>
+        <th>Cache Saved</th>
+        <th>Tok/min</th>
+      </tr>
+    </thead>
+    <tbody id="lap-tbody"></tbody>
+  </table>
+</div>
+
+<footer id="footer-text">lumen · http://127.0.0.1:9091</footer>
+</div>
+
+<script>
+  const API   = '';
+  const TOKEN = '__LUMEN_TOKEN__';
+  const HEADERS = { 'x-lumen-token': TOKEN };
+
+  function fmt$  (v)  {
+    if (v == null) return '—';
+    if (v === 0)   return '$0.00';
+    return '$' + v.toFixed(v >= 0.01 ? 4 : 6);
+  }
+  function fmtTok(v)  { return v == null ? '—' : v >= 1000 ? (v/1000).toFixed(1)+'k' : String(v); }
+  function fmtSec(s)  { return s >= 60 ? (s/60).toFixed(1)+'m' : s.toFixed(1)+'s'; }
+
+  function providerBadge(provider) {
+    const p = (provider || '').toLowerCase();
+    const cls = ['openai','anthropic','google','cursor'].includes(p) ? `badge-${p}` : 'badge-other';
+    return `<span class="badge ${cls}">${provider || '?'}</span>`;
+  }
+
+  function timeStr(iso) {
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  }
+
+  function costColor(v) {
+    if (v == null) return '';
+    if (v < 0.001) return 'green';
+    if (v < 0.01)  return '';
+    if (v < 0.05)  return 'yellow';
+    return 'red';
+  }
+
+  let lastEventId = null;
+  let seenIds = new Set();
+
+  async function fetchStats() {
+    const r = await fetch(API + '/stats', { headers: HEADERS });
+    return r.json();
+  }
+
+  async function fetchEvents() {
+    const r = await fetch(API + '/events?limit=50', { headers: HEADERS });
+    return r.json();
+  }
+
+  async function fetchLaps() {
+    const r = await fetch(API + '/laps', { headers: HEADERS });
+    return r.json();
+  }
+
+  function updateStats(s) {
+    const sc = s.session_cost || 0;
+    const el = document.getElementById('session-cost');
+    el.textContent = fmt$(sc);
+    el.className = 'card-value ' + costColor(sc);
+
+    document.getElementById('session-tokens').textContent =
+      fmtTok((s.session_input_tokens||0) + (s.session_output_tokens||0)) + ' tokens';
+
+    document.getElementById('total-cost').textContent = fmt$(s.total_cost);
+    document.getElementById('total-tokens').textContent = fmtTok(s.total_tokens) + ' tokens';
+
+    const saved = s.session_cache_savings || s.total_cache_savings || 0;
+    document.getElementById('cache-savings').textContent = fmt$(saved);
+
+    const sessionTotal = s.session_cost || 0;
+    const pct = sessionTotal > 0 ? Math.min(100, (saved / (saved + sessionTotal)) * 100) : 0;
+    document.getElementById('cache-gauge').style.width = pct.toFixed(1) + '%';
+
+    const tpm = s.tokens_per_minute || 0;
+    document.getElementById('token-rate').textContent = fmtTok(Math.round(tpm));
+
+    const model = s.top_model || '—';
+    document.getElementById('top-model').textContent = model.length > 20 ? model.slice(0,18)+'…' : model;
+    document.getElementById('top-provider').textContent = s.top_provider || '—';
+
+    document.getElementById('event-count').textContent = s.event_count != null ? s.event_count : '—';
+    document.getElementById('lap-label').textContent = 'lap ' + (s.current_lap || 1);
+  }
+
+  function renderEvents(events) {
+    if (!events || !events.length) return;
+    document.getElementById('feed-empty').style.display = 'none';
+
+    const feed = document.getElementById('event-feed');
+    const wasBottom = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 10;
+
+    // Only add rows for events we haven't seen yet
+    const newEvents = events.filter(e => !seenIds.has(e.id));
+    newEvents.forEach(e => seenIds.add(e.id));
+
+    // Prepend new events (newest at top)
+    for (let i = newEvents.length - 1; i >= 0; i--) {
+      const e = newEvents[i];
+      const totalTokens = (e.usage?.input_tokens || 0) + (e.usage?.output_tokens || 0);
+      const cost = e.cost?.total_cost;
+      const cacheSaved = e.cost?.cache_read_savings;
+
+      const row = document.createElement('div');
+      row.className = 'event-row';
+      row.innerHTML = `
+        <span class="ev-time">${timeStr(e.timestamp)}</span>
+        <span class="ev-model">${providerBadge(e.provider)} ${e.model || '?'}</span>
+        <span class="ev-tokens">${fmtTok(totalTokens)}</span>
+        <span class="ev-cost">${fmt$(cost)}</span>
+        <span class="ev-cache">${cacheSaved > 0 ? '<span style="color:var(--yellow)">+' + fmt$(cacheSaved) + '</span>' : '<span style="color:var(--muted)">—</span>'}</span>
+      `;
+
+      if (feed.firstChild && feed.firstChild.id === 'feed-empty') {
+        feed.insertBefore(row, feed.firstChild.nextSibling);
+      } else {
+        feed.insertBefore(row, feed.firstChild);
+      }
+    }
+
+    // Trim to 100 rows max
+    while (feed.children.length > 101) feed.removeChild(feed.lastChild);
+  }
+
+  function renderLaps(laps) {
+    const section = document.getElementById('lap-section');
+    if (!laps || !laps.length) { section.style.display = 'none'; return; }
+    section.style.display = '';
+
+    const tbody = document.getElementById('lap-tbody');
+    tbody.innerHTML = '';
+
+    [...laps].reverse().forEach(l => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>#${l.lap_number}</td>
+        <td>${l.label || ''}</td>
+        <td>${fmtSec(l.duration_secs || 0)}</td>
+        <td>${fmtTok(l.total_tokens)}</td>
+        <td class="lap-cost">${fmt$(l.cost)}</td>
+        <td class="lap-saving">${l.cache_savings > 0 ? fmt$(l.cache_savings) : '—'}</td>
+        <td>${Math.round(l.tokens_per_minute || 0)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  const dot  = document.getElementById('status-dot');
+  const stxt = document.getElementById('status-text');
+
+  async function tick() {
+    try {
+      const [stats, events, laps] = await Promise.all([fetchStats(), fetchEvents(), fetchLaps()]);
+      updateStats(stats);
+      renderEvents(events);
+      renderLaps(laps);
+      dot.className = 'live';
+      stxt.textContent = 'live';
+      stxt.style.color = 'var(--green)';
+    } catch (e) {
+      dot.className = '';
+      stxt.textContent = 'offline';
+      stxt.style.color = 'var(--red)';
+    }
+  }
+
+  tick();
+  setInterval(tick, 2000);
+</script>
+</body>
+</html>

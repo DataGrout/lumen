@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] — 2026-05-10
+
+### Added
+
+- **Web dashboard** — `GET /dashboard` serves a self-contained HTML dashboard at `http://127.0.0.1:9091/dashboard`. The token is injected at build time via `include_str!` + template substitution so the page authenticates automatically. The endpoint is auth-exempt (no `X-Lumen-Token` required) since the token is embedded in the served HTML itself.
+- **DataGrout sign-up link** — "Don't have an account? Create one free →" button in the DataGrout settings panel opens `https://app.datagrout.ai` in the default browser.
+
+---
+
 ## [0.1.2] — 2026-05-07
 
 ### Fixed

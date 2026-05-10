@@ -641,6 +641,17 @@ struct SettingsView: View {
                     .buttonStyle(.plain)
                     .disabled(dgConnecting || dgServerURL.isEmpty)
 
+                    Button(action: {
+                        if let url = URL(string: "https://app.datagrout.ai") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }) {
+                        Text("Don't have an account? Create one free →")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                    .buttonStyle(.plain)
+
                     if dgConnecting && dgAuthURL == nil {
                         Text("Registering client with server…")
                             .font(.system(size: 9))

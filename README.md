@@ -40,15 +40,31 @@ Two processes, zero npm dependencies:
 - **Endpoint monitoring** -- See exactly which URLs are intercepted and what data is captured
 - **Custom endpoints** -- Whitelist additional hosts (local LLMs, hosted models, MCP servers)
 - **DataGrout integration** -- Toggle DG tools visibility and Intelligent Interface
-- **Privacy-first** -- In normal operation, only token counts and pricing metadata are captured; message content is never stored or transmitted. An opt-in debug capture mode (`POST /api/debug/arm`) can temporarily buffer raw request/response payloads in memory for diagnostics — it is off by default and payloads are cleared on disarm.
+- **Privacy-first** -- In normal operation, only token counts and pricing metadata are captured; message content is never stored or transmitted. An opt-in debug capture mode (`POST /api/debug/arm`) can temporarily buffer raw request/response payloads in memory for diagnostics -- it is off by default and payloads are cleared on disarm.
+
+## Platform Support
+
+| Platform | Interface | Status |
+|---|---|---|
+| macOS | Native status bar app + browser dashboard | ✓ |
+| Linux | Browser dashboard | ✓ |
+| Windows | Browser dashboard | ✓ |
+
+The `lumen-core` daemon is pure Rust and runs on any platform. The macOS Swift app is optional -- on Linux and Windows, open `http://127.0.0.1:9091/dashboard` in any browser to get a live dashboard with the same stats, event feed, and lap history.
 
 ## Prerequisites
 
+**macOS (full app)**
 - macOS 14.0+
 - [Rust](https://rustup.rs/) (1.70+)
 - Xcode Command Line Tools (`xcode-select --install`)
 
+**Linux / Windows (daemon + browser dashboard)**
+- [Rust](https://rustup.rs/) (1.70+)
+
 ## Installation
+
+**macOS:**
 
 ```bash
 sh install.sh
@@ -56,10 +72,26 @@ sh install.sh
 
 This builds both binaries in release mode, assembles a `Lumen.app` bundle in `~/Applications`, and runs `mdimport` so Spotlight picks it up immediately. After that, **Cmd+Space -> "Lumen"** launches the app.
 
-To run in development without installing:
+**Linux:**
 
 ```bash
-sh run.sh   # debug build, live logs in the terminal
+cargo build --release
+./target/release/lumen-core &
+# Then open http://127.0.0.1:9091/dashboard
+```
+
+**Windows:**
+
+```powershell
+cargo build --release
+Start-Process .\target\release\lumen-core.exe
+# Then open http://127.0.0.1:9091/dashboard
+```
+
+To run in development without installing (any platform):
+
+```bash
+cargo run   # debug build, live logs in the terminal
 ```
 
 ## Setup
@@ -82,7 +114,7 @@ You can also do this from **Settings -> Certificate -> Trust CA** inside the Lum
 
 ### 2. Configure your LLM client
 
-**Cursor** (recommended — use the launcher shortcut):
+**Cursor** (recommended -- use the launcher shortcut):
 
 The easiest way is the **Launch** tab in Lumen, which starts Cursor with the proxy and CA cert pre-configured:
 
@@ -129,7 +161,7 @@ Custom hosts are stored in the daemon config and persist across restarts. Any ho
 
 ## Relay Routes
 
-For tools that don't support proxies, Lumen can act as a relay endpoint — requests to `http://127.0.0.1:9090/anthropic` are forwarded to `https://api.anthropic.com`, adding monitoring transparently.
+For tools that don't support proxies, Lumen can act as a relay endpoint -- requests to `http://127.0.0.1:9090/anthropic` are forwarded to `https://api.anthropic.com`, adding monitoring transparently.
 
 Built-in relay routes: `/openai`, `/anthropic`, `/google`
 
@@ -137,7 +169,7 @@ Built-in relay routes: `/openai`, `/anthropic`, `/google`
 
 Connect Lumen to a DataGrout server to sync usage events and lap snapshots for team reporting:
 
-1. **Settings -> DataGrout -> Connect** — paste your DataGrout server URL (or bare UUID)
+1. **Settings -> DataGrout -> Connect** -- paste your DataGrout server URL (or bare UUID)
 2. Complete the OAuth flow in the browser
 3. Usage events sync every 30 seconds; lap snapshots sync immediately when you press the lap button
 

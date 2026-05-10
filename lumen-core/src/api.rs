@@ -73,7 +73,7 @@ async fn handle_api_request(
     // and the health probe (used by DaemonManager without a token).
     let auth_exempt = matches!(
         (method.as_str(), path.as_str()),
-        ("GET", "/health") | ("GET", "/dg/oauth/callback")
+        ("GET", "/health") | ("GET", "/dg/oauth/callback") | ("GET", "/dashboard")
     );
     if !auth_exempt {
         let provided = req
@@ -514,6 +514,16 @@ async fn handle_api_request(
                 "transparent_enabled": state.transparent_config.read().enabled,
             }),
         ),
+
+        (Method::GET, "/dashboard") => {
+            let html = include_str!("dashboard.html")
+                .replace("__LUMEN_TOKEN__", &state.api_token);
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(Full::new(Bytes::from(html)))
+                .unwrap()
+        }
 
         // ─── Conduit / DG identity ─────────────────────────────────────────────
         (Method::GET, "/dg/status") => {
