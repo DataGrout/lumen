@@ -1,3 +1,4 @@
+#![cfg(feature = "passive")]
 //! Passive packet capture for monitoring LLM API traffic.
 //!
 //! Uses libpcap/BPF to observe TCP traffic on port 443 and identifies

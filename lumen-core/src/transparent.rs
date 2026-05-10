@@ -1,3 +1,4 @@
+#![cfg(target_os = "macos")]
 //! Transparent proxy listener for pf-redirected connections.
 //!
 //! Accepts raw TCP connections redirected by macOS pf, recovers the original

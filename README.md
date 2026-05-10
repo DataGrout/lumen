@@ -61,6 +61,7 @@ The `lumen-core` daemon is pure Rust and runs on any platform. The macOS Swift a
 
 **Linux / Windows (daemon + browser dashboard)**
 - [Rust](https://rustup.rs/) (1.70+)
+- Linux: `libpcap-dev` only if using `--features passive` (passive packet capture)
 
 ## Installation
 
@@ -78,6 +79,12 @@ This builds both binaries in release mode, assembles a `Lumen.app` bundle in `~/
 cargo build --release
 ./target/release/lumen-core &
 # Then open http://127.0.0.1:9091/dashboard
+```
+
+Passive packet capture (optional, requires `libpcap-dev` and root/BPF access):
+```bash
+cargo build --release --features passive
+sudo ./target/release/lumen-core --passive
 ```
 
 **Windows:**

@@ -2,15 +2,18 @@ mod aggregator;
 mod api;
 mod ca;
 mod conduit;
-mod nat_lookup;
 mod parser;
 mod pricing;
 mod proxy;
+#[cfg(feature = "passive")]
 mod sniffer;
 mod state;
 mod sync;
 mod tls;
 mod traffic;
+#[cfg(target_os = "macos")]
+mod nat_lookup;
+#[cfg(target_os = "macos")]
 mod transparent;
 
 use pricing::PricingDatabase;
@@ -41,9 +44,13 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let api_port = parse_port_arg(&args, "--api-port", 9091);
     let proxy_port = parse_port_arg(&args, "--proxy-port", 9090);
+    #[cfg(target_os = "macos")]
     let transparent_port = parse_port_arg(&args, "--transparent-port", 9443);
+    #[cfg(target_os = "macos")]
     let transparent_enabled = has_flag(&args, "--transparent");
+    #[cfg(feature = "passive")]
     let passive_enabled = has_flag(&args, "--passive");
+    #[cfg(feature = "passive")]
     let passive_interface = args
         .windows(2)
         .find(|w| w[0] == "--passive-iface")
@@ -93,7 +100,8 @@ async fn main() {
         }
     });
 
-    // Transparent proxy (requires root, opt-in via --transparent)
+    // Transparent proxy (requires root, opt-in via --transparent, macOS only)
+    #[cfg(target_os = "macos")]
     if transparent_enabled {
         {
             let mut tc = app_state.transparent_config.write();
@@ -137,6 +145,7 @@ async fn main() {
     });
 
     // Passive packet capture (requires root/BPF, opt-in via --passive)
+    #[cfg(feature = "passive")]
     if passive_enabled {
         let sniff = Arc::new(sniffer::PassiveSniffer::new(
             app_state.aggregator.clone(),
@@ -155,9 +164,11 @@ async fn main() {
         format!("proxy :{}", proxy_port),
         format!("API :{}", api_port),
     ];
+    #[cfg(target_os = "macos")]
     if transparent_enabled {
         mode_parts.push(format!("transparent :{}", transparent_port));
     }
+    #[cfg(feature = "passive")]
     if passive_enabled {
         mode_parts.push("passive".to_string());
     }
@@ -204,7 +215,8 @@ async fn main() {
         }
     }
 
-    // Cleanup: flush pf anchor rules if transparent mode was enabled
+    // Cleanup: flush pf anchor rules if transparent mode was enabled (macOS only)
+    #[cfg(target_os = "macos")]
     if transparent_enabled {
         tracing::info!("Cleaning up pf anchor rules...");
         let cleanup = std::process::Command::new("pfctl")

@@ -456,10 +456,12 @@ async fn handle_api_request(
             json_response(StatusCode::OK, &samples)
         }
 
+        #[cfg(target_os = "macos")]
         (Method::GET, "/transparent/config") => {
             json_response(StatusCode::OK, &state.transparent_config.read().clone())
         }
 
+        #[cfg(target_os = "macos")]
         (Method::POST, "/transparent/pf/enable") => {
             let body_bytes = req.into_body().collect().await?.to_bytes();
             let result: Result<Response<Full<Bytes>>, hyper::Error> = (|| {
@@ -497,6 +499,7 @@ async fn handle_api_request(
             return result;
         }
 
+        #[cfg(target_os = "macos")]
         (Method::POST, "/transparent/pf/disable") => json_response(
             StatusCode::OK,
             &serde_json::json!({

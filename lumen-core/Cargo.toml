@@ -34,8 +34,11 @@ flate2 = "1"
 libc = "0.2"
 sha2 = "0.10"
 rand = "0.8"
-pcap = { version = "2", features = ["capture-stream"] }
-etherparse = "0.16"
+pcap = { version = "2", features = ["capture-stream"], optional = true }
+etherparse = { version = "0.16", optional = true }
+
+[features]
+passive = ["dep:pcap", "dep:etherparse"]
 
 [dev-dependencies]
 nix = { version = "0.29", features = ["signal"] }

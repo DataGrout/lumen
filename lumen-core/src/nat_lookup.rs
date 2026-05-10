@@ -1,3 +1,4 @@
+#![cfg(target_os = "macos")]
 //! Original destination recovery for pf-redirected connections on macOS.
 //!
 //! When macOS pf's `rdr` rule rewrites a packet's destination, the original
