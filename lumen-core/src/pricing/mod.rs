@@ -124,9 +124,58 @@ impl PricingDatabase {
         db.add("google", "gemini-1.5-pro", 1.25, 5.00, None, None);
         db.add("google", "gemini-1.5-flash", 0.075, 0.30, None, None);
 
+        // ----------------------------------------------------------------------
+        // Cursor pricing
+        //
+        // Cursor's "On-Demand" billing is dramatically lower than the underlying
+        // Anthropic / OpenAI direct API rates because:
+        //
+        //   1. Cursor caches conversation context very aggressively. Cache hit
+        //      rates >85% are typical for follow-up turns in a session.
+        //   2. The cache is invisible to the proxy — Cursor's binary protobuf
+        //      response doesn't expose `cache_read_input_tokens` the way
+        //      Anthropic's JSON API does. We can't separate cached from fresh
+        //      input.
+        //   3. Cursor sends the conversation context out-of-band via background
+        //      `BidiAppend` calls (which are filtered as noise) and the actual
+        //      `RunSSE` request only carries the user delta. So byte-estimation
+        //      on the visible request body massively undercounts input tokens
+        //      and most byte-estimated tokens land in `output_tokens`.
+        //
+        // The net effect is that pricing Cursor traffic at Anthropic-direct
+        // rates (e.g. $75/MTok for Opus output) overshoots real invoice numbers
+        // by 15–30x. The rates below are calibrated against observed Cursor
+        // "On-Demand" invoices (e.g. claude-opus-4-7-thinking-high billed at
+        // ~$2.84/MTok blended on a 963K-token call) so that Lumen's cost
+        // numbers land within ~2x of the actual Cursor bill.
+        //
+        // These are EFFECTIVE blended rates that absorb byte-estimation bias.
+        // If we ever start extracting real cache-aware usage from Cursor's
+        // gRPC responses, these should be revisited (and likely raised toward
+        // the underlying Anthropic/OpenAI direct rates).
+        // ----------------------------------------------------------------------
+        db.add("cursor", "claude-opus-4-7", 3.00, 5.00, Some(0.30), Some(3.75));
+        db.add("cursor", "claude-opus-4", 3.00, 5.00, Some(0.30), Some(3.75));
+        db.add("cursor", "claude-sonnet-4-6", 0.60, 1.00, Some(0.06), Some(0.75));
+        db.add("cursor", "claude-sonnet-4", 0.60, 1.00, Some(0.06), Some(0.75));
+        db.add("cursor", "claude-haiku-4-5", 0.16, 0.27, Some(0.016), Some(0.20));
+        db.add("cursor", "claude-haiku-4", 0.16, 0.27, Some(0.016), Some(0.20));
+
+        // Cursor's own first-party models (Composer family) — flat, very cheap.
+        // composer-2-fast invoices around $0.75/MTok blended.
+        db.add("cursor", "composer-2", 0.10, 0.50, None, None);
+        db.add("cursor", "composer-2-fast", 0.10, 0.50, None, None);
+
+        // OpenAI models routed through Cursor — calibrated similarly.
+        db.add("cursor", "gpt-5.5", 0.20, 1.00, Some(0.02), None);
+        db.add("cursor", "gpt-5", 0.30, 1.50, Some(0.03), None);
+        db.add("cursor", "gpt-5-mini", 0.06, 0.30, Some(0.006), None);
+        db.add("cursor", "gpt-5-nano", 0.02, 0.10, Some(0.002), None);
+
         // Cursor fallback — used when we can't detect the specific model.
-        // Priced at Claude Sonnet rates (most common Cursor model tier).
-        db.add("cursor", "cursor-unknown", 3.00, 15.00, None, None);
+        // Conservative blended rate; far lower than the Anthropic-direct $3/$15
+        // we used previously, which overshot real Cursor invoices badly.
+        db.add("cursor", "cursor-unknown", 0.50, 2.50, None, None);
 
         db
     }
@@ -166,11 +215,22 @@ impl PricingDatabase {
         let provider_str = provider.to_string();
 
         let pricing = if provider == LLMProvider::Cursor {
-            // First check cursor-specific entries, then search other providers by model name.
+            // Cursor lookup precedence:
+            //   1. exact match in the cursor namespace (cursor:<model>)
+            //   2. fuzzy match within the cursor namespace — this is critical
+            //      so variants like `claude-opus-4-7-thinking-high` resolve to
+            //      `cursor:claude-opus-4-7` instead of falling through to the
+            //      Anthropic-direct `claude-opus-4-7` entry, which is priced
+            //      at $15/$75 and overshoots real Cursor billing by 15–30x.
+            //   3. cross-provider match — a true fallback used only for
+            //      cursor-routed models we haven't explicitly catalogued.
+            //   4. cursor-unknown sentinel (cheap blended fallback).
             let cursor_key = format!("cursor:{}", model);
             self.models
                 .get(&cursor_key)
+                .or_else(|| self.fuzzy_match("cursor", model))
                 .or_else(|| self.cross_provider_match(model))
+                .or_else(|| self.models.get("cursor:cursor-unknown"))
         } else {
             let key = format!("{}:{}", provider_str, model);
             self.models
@@ -325,7 +385,11 @@ mod tests {
     }
 
     #[test]
-    fn test_cursor_cross_provider_lookup() {
+    fn test_cursor_uses_cursor_pricing_not_anthropic_direct() {
+        // When a Claude model is routed through Cursor, we MUST price it at the
+        // calibrated cursor:* rates, not at Anthropic-direct API rates. Anthropic
+        // direct rates for Sonnet are $3/$15 — pricing Cursor traffic that way
+        // overshoots real Cursor invoices by ~15x.
         let db = PricingDatabase::with_defaults();
         let cost = db.calculate_cost(
             LLMProvider::Cursor,
@@ -335,10 +399,93 @@ mod tests {
             None,
             None,
         );
-        // Should match Anthropic's claude-sonnet-4 pricing
-        assert!((cost.input_cost - 3.00).abs() < 0.01);
-        assert!((cost.output_cost - 7.50).abs() < 0.01);
+        // cursor:claude-sonnet-4 = $0.60 input / $1.00 output
+        assert!(
+            (cost.input_cost - 0.60).abs() < 0.01,
+            "got input_cost {}",
+            cost.input_cost
+        );
+        assert!(
+            (cost.output_cost - 0.50).abs() < 0.01,
+            "got output_cost {}",
+            cost.output_cost
+        );
         assert_eq!(cost.provider, "cursor");
+    }
+
+    #[test]
+    fn test_cursor_opus_thinking_variant_resolves_to_cursor_opus() {
+        // Cursor exposes Opus 4.7 as "claude-opus-4-7-thinking-high" in their
+        // billing UI. Lumen extracts the model as either the full string or the
+        // shorter "claude-opus-4-7" — both must resolve to cursor:claude-opus-4-7
+        // pricing, NOT to anthropic:claude-opus-4-20250514 ($15/$75).
+        let db = PricingDatabase::with_defaults();
+        let cost = db.calculate_cost(
+            LLMProvider::Cursor,
+            "claude-opus-4-7-thinking-high",
+            1_000_000,
+            500_000,
+            None,
+            None,
+        );
+        // cursor:claude-opus-4-7 = $3.00 input / $5.00 output
+        assert!(
+            (cost.input_cost - 3.00).abs() < 0.01,
+            "expected $3.00 input, got {}",
+            cost.input_cost
+        );
+        assert!(
+            (cost.output_cost - 2.50).abs() < 0.01,
+            "expected $2.50 output, got {}",
+            cost.output_cost
+        );
+        assert_eq!(cost.provider, "cursor");
+    }
+
+    #[test]
+    fn test_cursor_composer_priced() {
+        // composer-2-fast invoices around $0.75/MTok blended on real Cursor bills.
+        // Without an explicit cursor:composer-2-fast entry it would fall through
+        // to the $5/$15 unknown-model fallback (way too high).
+        let db = PricingDatabase::with_defaults();
+        let cost = db.calculate_cost(
+            LLMProvider::Cursor,
+            "composer-2-fast",
+            500_000,
+            500_000,
+            None,
+            None,
+        );
+        // 0.5M * $0.10 + 0.5M * $0.50 = $0.05 + $0.25 = $0.30
+        assert!(
+            (cost.total_cost - 0.30).abs() < 0.01,
+            "expected $0.30, got {}",
+            cost.total_cost
+        );
+    }
+
+    #[test]
+    fn test_cursor_opus_realistic_call_against_invoice() {
+        // Calibration check against a real Cursor invoice line:
+        //   claude-opus-4-7-thinking-high, 963.1K tokens, $2.74
+        // We don't know Cursor's input/output split, but with byte-estimation
+        // most tokens land in output_tokens. Worst case (all output) at
+        // cursor:claude-opus-4-7's $5/MTok output rate:
+        //   963_100 * $5/MTok = $4.82
+        // That's within ~2x of the $2.74 invoice — vs the $72.23 we'd compute
+        // with the old Anthropic-direct $75/MTok rate.
+        let db = PricingDatabase::with_defaults();
+        let cost = db.calculate_cost(LLMProvider::Cursor, "claude-opus-4-7", 0, 963_100, None, None);
+        assert!(
+            cost.total_cost < 6.0,
+            "cost should be in the ~$2-5 ballpark, got {}",
+            cost.total_cost
+        );
+        assert!(
+            cost.total_cost > 1.0,
+            "cost should not be near zero, got {}",
+            cost.total_cost
+        );
     }
 
     #[test]

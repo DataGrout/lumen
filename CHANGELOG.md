@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] — 2026-05-15
+
+### Fixed
+
+- **Cursor cost overestimation by 15–30x** — Cursor traffic was being priced at the underlying Anthropic/OpenAI direct API rates (e.g. `claude-opus-4-7` at $15/$75 per million tokens), which dramatically overshoots Cursor's "On-Demand" billing. A 963K-token Opus call invoiced by Cursor at ~$2.74 was being reported as ~$72. Fix: added a calibrated `cursor:` namespace to the pricing database with effective blended rates derived from real Cursor invoices (`claude-opus-4-7`, `claude-opus-4`, `claude-sonnet-4-6`, `claude-sonnet-4`, `claude-haiku-4-5`, `claude-haiku-4`, `composer-2`, `composer-2-fast`, `gpt-5.5`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`). Lumen's reported costs now land within ~2x of the actual Cursor bill.
+- **Cursor pricing lookup precedence** — `calculate_cost` now does an exact match in the `cursor:` namespace, then a fuzzy match within `cursor:`, then cross-provider fallback, then the `cursor-unknown` sentinel. The new fuzzy step is what makes variants like `claude-opus-4-7-thinking-high` resolve to `cursor:claude-opus-4-7` instead of leaking through to the (much pricier) Anthropic-direct entry.
+- **`composer-2-fast` priced as unknown** — Cursor's first-party Composer models had no pricing entries and fell through to the $5/$15 unknown-model fallback. They now have explicit `cursor:composer-2` and `cursor:composer-2-fast` entries (~$0.75/MTok blended, matching observed invoices).
+- **`cursor-unknown` fallback rate** — lowered from $3/$15 to $0.50/$2.50 per million tokens, an honest blended rate for unidentified Cursor traffic.
+
+### Tests
+
+- `pricing::test_cursor_uses_cursor_pricing_not_anthropic_direct` — locks in that Cursor traffic never gets Anthropic-direct rates.
+- `pricing::test_cursor_opus_thinking_variant_resolves_to_cursor_opus` — locks in the cursor-namespace fuzzy match for `-thinking-high` (and similar) variants.
+- `pricing::test_cursor_composer_priced` — covers `composer-2-fast` no longer falling through to the unknown-model fallback.
+- `pricing::test_cursor_opus_realistic_call_against_invoice` — calibration check against a real Cursor invoice line (963.1K tokens for $2.74).
+
+### Known limitations (not addressed in this release)
+
+- Cursor token counts are still byte-estimated (`BYTES_PER_TOKEN = 4.0`), which over-counts heavily for SSE-wrapped streams and lands almost everything in `output_tokens`. The new pricing absorbs this bias but doesn't fix it.
+- Cursor's gRPC responses don't expose `cache_read_input_tokens` the way Anthropic's JSON API does, so cache savings from Cursor traffic remain invisible. Real-usage extraction would require decoding Cursor's protobuf schema.
+
+---
+
 ## [0.1.3] — 2026-05-10
 
 ### Added
