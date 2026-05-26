@@ -55,6 +55,12 @@ if pgrep -f lumen-core > /dev/null 2>&1; then
     echo "[lumen] Killing existing lumen-core processes..."
     pkill -f lumen-core 2>/dev/null || true
     sleep 1
+    # Fall back to SIGKILL if SIGTERM was ignored
+    if pgrep -f lumen-core > /dev/null 2>&1; then
+        echo "[lumen] Process still alive, sending SIGKILL..."
+        pkill -9 -f lumen-core 2>/dev/null || true
+        sleep 0.5
+    fi
 fi
 
 cleanup() {

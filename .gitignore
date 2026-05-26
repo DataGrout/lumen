@@ -22,6 +22,8 @@ DerivedData/
 # Local dev / internal
 .claude/
 .cursor/
+.manifold/
+.invariant/
 benchmarks/
 
 # Distribution artifacts (shared externally, not via git)

@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] — 2026-05-26
+
+### Fixed
+
+- **`claude-opus-4-7` priced at $15/$75 instead of $5/$25** — The model was using the deprecated Opus 4.0/4.1 rate tier, making every Opus 4.7 call report 3× the expected cost. The correct Opus 4.7 rate is `$5.00/$25.00` per million tokens (same tier as Opus 4.5 and 4.6).
+- **`claude-haiku-4-5` priced at $0.80/$4.00 instead of $1.00/$5.00** — Was using the retired Haiku 3.5 rates. Now correctly uses the Haiku 4.5 rate tier.
+- **Fuzzy model-name match too broad** — `gpt-4.1` was resolving to `gpt-4` (30× more expensive) because the prefix check used a plain `starts_with` without requiring a `-` separator after the prefix. Fixed: fuzzy matching now only considers a prefix match valid when the character immediately following the prefix in the longer name is `-`, so `gpt-4.1` no longer matches `gpt-4` but `gpt-4o-2024-08-06` still matches `gpt-4o`.
+- **Stale lumen-core process surviving `run.sh` restart** — A lumen-core process launched from a different path (e.g. a recorded demo session) could ignore `SIGTERM`, leaving ports 9090/9091 occupied and preventing the new binary from starting. `run.sh` now sends `SIGKILL` as a fallback if the process is still alive after the initial `pkill`.
+
+### Added
+
+- **Externally-updatable JSON pricing file** (`lumen-core/pricing.json`) — All model pricing is now defined in a single JSON file (schema version 1) committed to the repo. This lets rates be updated without recompiling.
+- **Pricing loader** (`pricing::loader`) — On startup, `load_pricing()` selects the best available source: user override at `~/.lumen/pricing.json`, last remote fetch at `~/.lumen/pricing.json.cache`, or compiled-in defaults. After loading, a background task fetches the canonical file from the repository and writes it to the cache path so the next restart automatically gets fresh rates.
+- **Current OpenAI models** added to compiled-in defaults and `pricing.json`:
+  - **GPT-5.x family** (released 2025–2026): `gpt-5.5` ($5.00/$30.00), `gpt-5.5-pro` ($30.00/$180.00), `gpt-5.4` ($2.50/$15.00), `gpt-5.4-mini` ($0.75/$4.50), `gpt-5.4-nano` ($0.20/$1.25), `gpt-5.4-pro` ($30.00/$180.00) — all cached at 10% of input rate
+  - **Codex family**: `gpt-5.3-codex` ($1.75/$14.00, cache $0.175) and `gpt-5.1-codex-mini` ($0.25/$2.00, cache $0.025)
+  - **GPT-4.1 family**: `gpt-4.1` ($2.00/$8.00), `gpt-4.1-mini` ($0.40/$1.60), `gpt-4.1-nano` ($0.10/$0.40) with dated aliases (`-2025-04-14`)
+  - **GPT-4o dated aliases**: `gpt-4o-2024-11-20`, `gpt-4o-2024-08-06`, `gpt-4o-mini-2024-07-18` (current-rate); `gpt-4o-2024-05-13` ($5.00/$15.00) and `chatgpt-4o-latest` ($5.00/$15.00) as explicit entries since the older snapshot is priced higher than the current `gpt-4o`
+  - `codex-mini-latest` ($1.50/$6.00, cache $0.375)
+- **Retired o-series entries** added with `"note": "retired"` for historical traffic attribution — the entire OpenAI o-series was retired from ChatGPT on 2026-02-13 (o1-preview hard-shutdown 2025-07-28; o1-mini hard-shutdown 2025-10-27). Entries are kept so cost reporting remains accurate for any residual API calls from apps that haven't migrated: `o1`, `o1-2024-12-17`, `o1-pro`, `o1-mini`, `o1-mini-2024-09-12`, `o1-preview`, `o3`, `o3-2025-04-16`, `o3-pro`, `o3-mini`, `o3-mini-2025-01-31`, `o4-mini`, `o4-mini-2025-04-16`.
+- **`notes.retired` convention** added to `pricing.json` header to document what the `"note": "retired"` tag means and why those entries are preserved.
+- **Expanded Anthropic model coverage** — Added explicit entries for `claude-opus-4-0`, `claude-opus-4-1`, `claude-opus-4-1-20250805`, `claude-opus-4-5`, `claude-opus-4-5-20251101`, `claude-opus-4-6`, `claude-sonnet-4-0`, `claude-sonnet-4-5`, `claude-sonnet-4-5-20250929` so dated and minor variants resolve correctly without relying solely on fuzzy matching.
+
+### Tests
+
+- `pricing::test_opus_4_7_is_5_25_not_15_75` — regression guard for the Opus 4.7 rate fix.
+- `pricing::test_haiku_4_5_is_1_5_not_0_80_4` — regression guard for the Haiku 4.5 rate fix.
+- `pricing::test_gpt_4_1_family_priced` — verifies `gpt-4.1`, `gpt-4.1-mini`, and `gpt-4.1-nano` resolve to correct rates and are not fuzzy-matched to `gpt-4`.
+- `pricing::test_from_file_roundtrip` — verifies `PricingDatabase::from_file()` correctly parses an inline JSON snippet and produces accurate cost calculations.
+- `pricing::test_from_file_rejects_unknown_schema_version` — verifies the loader falls back to compiled-in defaults (not a crash or silent success) when `schema_version` is not 1.
+- `pricing::test_repo_pricing_json_is_valid` — compile-time inclusion of `pricing.json` via `include_str!`, parsed and validated on every `cargo test` run to catch malformed JSON or unsupported schema versions before they ship.
+- `pricing::test_o1_pro_and_o3_pro_not_misprice_as_o1_o3` — verifies `o1-pro` ($150/$600), `o3-pro` ($20/$80), and `codex-mini-latest` are not fuzzy-matched down to the cheaper base model rate (relevant even for retired models that still appear in traffic from unmigrated apps).
+- `pricing::test_gpt4o_old_snapshot_uses_higher_rate` — verifies `gpt-4o-2024-05-13` uses the $5.00 input rate and is not overridden by fuzzy-matching to the cheaper current `gpt-4o` entry.
+- `pricing::test_gpt5_family_no_fuzzy_bleed` — verifies all eight GPT-5.x/Codex models resolve to their correct prices and `-pro`, `-mini`, `-nano` suffixed variants don't bleed into the cheaper base model price via fuzzy matching.
+
+---
+
 ## [0.1.4] — 2026-05-15
 
 ### Fixed

@@ -16,7 +16,6 @@ mod nat_lookup;
 #[cfg(target_os = "macos")]
 mod transparent;
 
-use pricing::PricingDatabase;
 use state::AppState;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -56,7 +55,7 @@ async fn main() {
         .find(|w| w[0] == "--passive-iface")
         .map(|w| w[1].clone());
 
-    let pricing = PricingDatabase::with_defaults();
+    let pricing = pricing::loader::load_pricing();
     let aggregator = Arc::new(aggregator::Aggregator::new(pricing));
 
     let ca = ca::LumenCA::load_or_generate().expect("Failed to initialize CA");

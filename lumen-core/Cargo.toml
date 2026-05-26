@@ -1,6 +1,6 @@
 [package]
 name = "lumen-core"
-version = "0.1.4"
+version = "0.1.5"
 description = "LLM usage monitor daemon — proxy, parser, pricing, and JSON API"
 authors = ["DataGrout"]
 edition = "2021"
