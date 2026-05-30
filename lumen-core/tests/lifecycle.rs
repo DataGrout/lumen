@@ -18,24 +18,33 @@ fn ensure_crypto_installed() {
 }
 
 fn find_binary() -> String {
+    // EXE_SUFFIX is "" on Unix and ".exe" on Windows. Concatenating it to
+    // every candidate path makes the lookup work uniformly — without this,
+    // the Windows CI runner couldn't find lumen-core.exe and every
+    // integration test panicked at startup.
+    let bin = format!("lumen-core{}", std::env::consts::EXE_SUFFIX);
+
     if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
-        let path = format!("{}/debug/lumen-core", target_dir);
+        let path = format!("{}/debug/{}", target_dir, bin);
         if std::path::Path::new(&path).exists() {
             return path;
         }
     }
 
-    let targets = ["target/debug/lumen-core", "../target/debug/lumen-core"];
+    let targets = [
+        format!("target/debug/{}", bin),
+        format!("../target/debug/{}", bin),
+    ];
     for t in &targets {
         if std::path::Path::new(t).exists() {
-            return t.to_string();
+            return t.clone();
         }
     }
 
     let current_exe = std::env::current_exe().ok();
     if let Some(exe) = current_exe {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join("lumen-core");
+            let candidate = dir.join(&bin);
             if candidate.exists() {
                 return candidate.to_string_lossy().to_string();
             }
@@ -96,6 +105,9 @@ impl DaemonGuard {
         panic!("api.token not found at {:?} after 3 s", path);
     }
 
+    // Only used by `test_sigterm_handling`, which is itself `#[cfg(unix)]`.
+    // Gating the method with the same cfg keeps Windows builds warning-free.
+    #[cfg(unix)]
     fn pid(&self) -> u32 {
         self.child.as_ref().unwrap().id()
     }

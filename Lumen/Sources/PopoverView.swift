@@ -66,50 +66,29 @@ struct PopoverView: View {
     private static let dashboardURL = URL(string: "http://127.0.0.1:9091/dashboard")!
 
     private var persistentFooter: some View {
-        HStack(spacing: 6) {
-            Button(action: {
-                NSWorkspace.shared.open(Self.dashboardURL)
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "safari")
-                        .font(.system(size: 9))
-                    Text("Dashboard")
-                        .font(.system(size: 10, weight: .medium))
-                        .textCase(.uppercase)
-                        .tracking(0.4)
-                }
-                .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.85))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.10))
-                .clipShape(RoundedRectangle(cornerRadius: 7))
-                .overlay(RoundedRectangle(cornerRadius: 7)
-                    .stroke(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.30), lineWidth: 1))
-                .contentShape(Rectangle())
+        VStack(spacing: 6) {
+            // Lap-naming text field appears when the user clicks Lap; lives
+            // here (not in monitorView) so committing it doesn't push the
+            // footer off-screen.
+            if namingLap {
+                lapNamingRow
             }
-            .buttonStyle(.plain)
-            .focusable(false)
 
-            Button(action: { NSApp.terminate(nil) }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "power")
-                        .font(.system(size: 9))
-                    Text("Quit")
-                        .font(.system(size: 10, weight: .medium))
-                        .textCase(.uppercase)
-                        .tracking(0.4)
+            // Context-specific row: Lap + Clear, Monitor tab only. Stacked
+            // above the global Dashboard/Quit row so the buttons closest to
+            // your monitoring data are the ones that act on it.
+            if activeTab == .monitor {
+                HStack(spacing: 6) {
+                    lapFooterButton
+                    clearFooterButton
                 }
-                .foregroundStyle(.red.opacity(0.7))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(Color.red.opacity(0.07))
-                .clipShape(RoundedRectangle(cornerRadius: 7))
-                .overlay(RoundedRectangle(cornerRadius: 7)
-                    .stroke(Color.red.opacity(0.20), lineWidth: 1))
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .focusable(false)
+
+            // Global row: Dashboard + Quit, always visible regardless of tab.
+            HStack(spacing: 6) {
+                dashboardFooterButton
+                quitFooterButton
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -120,6 +99,105 @@ struct PopoverView: View {
                 .foregroundStyle(Color.white.opacity(0.05)),
             alignment: .top
         )
+    }
+
+    // MARK: - Footer button components
+    // Broken out so the persistentFooter VStack stays scannable. Each one
+    // matches the original .plain-button styling pattern used elsewhere in
+    // the popover (color-tinted background + matching stroke + contentShape
+    // so the full padded area is hit-testable).
+
+    private var lapFooterButton: some View {
+        Button(action: {
+            guard !namingLap else { return }
+            lapNameInput = ""
+            namingLap = true
+            lapNameFocused = true
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: "stopwatch").font(.system(size: 9))
+                Text("Lap")
+                    .font(.system(size: 10, weight: .medium))
+                    .textCase(.uppercase)
+                    .tracking(0.4)
+            }
+            .foregroundStyle(.orange.opacity(0.85))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Color.orange.opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.orange.opacity(0.35), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+    }
+
+    private var clearFooterButton: some View {
+        Button(action: { Task { await apiClient.clearSession() } }) {
+            HStack(spacing: 4) {
+                Image(systemName: "trash").font(.system(size: 9))
+                Text("Clear")
+                    .font(.system(size: 10, weight: .medium))
+                    .textCase(.uppercase)
+                    .tracking(0.4)
+            }
+            .foregroundStyle(.white.opacity(0.6))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+    }
+
+    private var dashboardFooterButton: some View {
+        Button(action: { NSWorkspace.shared.open(Self.dashboardURL) }) {
+            HStack(spacing: 4) {
+                Image(systemName: "safari").font(.system(size: 9))
+                Text("Dashboard")
+                    .font(.system(size: 10, weight: .medium))
+                    .textCase(.uppercase)
+                    .tracking(0.4)
+            }
+            .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.85))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.30), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+    }
+
+    private var quitFooterButton: some View {
+        Button(action: { NSApp.terminate(nil) }) {
+            HStack(spacing: 4) {
+                Image(systemName: "power").font(.system(size: 9))
+                Text("Quit")
+                    .font(.system(size: 10, weight: .medium))
+                    .textCase(.uppercase)
+                    .tracking(0.4)
+            }
+            .foregroundStyle(.red.opacity(0.7))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Color.red.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.red.opacity(0.20), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
     }
 
     private var header: some View {
@@ -232,7 +310,9 @@ struct PopoverView: View {
                     dgCTABanner(reason: cta)
                 }
                 EventFeedView(events: apiClient.recentEvents, laps: apiClient.laps)
-                actionButtons
+                // Lap / Clear moved to persistentFooter — they're now always
+                // visible at the bottom of the popover when on Monitor,
+                // stacked above the global Dashboard / Quit row.
             }
         }
     }
@@ -704,68 +784,8 @@ struct PopoverView: View {
         return rows.joined(separator: "\n").data(using: .utf8) ?? Data()
     }
 
-    // MARK: - Action Buttons
-
-    private var actionButtons: some View {
-        VStack(spacing: 6) {
-            if namingLap {
-                lapNamingRow
-            }
-
-            HStack(spacing: 6) {
-            Button(action: {
-                guard !namingLap else { return }
-                lapNameInput = ""
-                namingLap = true
-                lapNameFocused = true
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "stopwatch")
-                        .font(.system(size: 9))
-                    Text("Lap")
-                        .font(.system(size: 10, weight: .medium))
-                        .textCase(.uppercase)
-                        .tracking(0.4)
-                }
-                .foregroundStyle(.orange.opacity(0.8))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(Color.orange.opacity(0.10))
-                .clipShape(RoundedRectangle(cornerRadius: 7))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(Color.orange.opacity(0.35), lineWidth: 1)
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .focusable(false)
-
-            // Quit moved to the persistent footer (always visible regardless
-            // of tab). Lap + Clear stay here because they're context-specific
-            // to the Monitor view.
-            Button(action: { Task { await apiClient.clearSession() } }) {
-                Text("Clear")
-                    .font(.system(size: 10, weight: .medium))
-                    .textCase(.uppercase)
-                    .tracking(0.4)
-                    .foregroundStyle(.white.opacity(0.6))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .background(Color.white.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7)
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    )
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .focusable(false)
-        }
-        }
-        .padding(.top, 4)
-    }
+    // (Action buttons moved into persistentFooter — Lap+Clear are now in the
+    //  footer's Monitor-only row; Quit is in the always-visible row.)
 
     // MARK: - DG CTA
 
