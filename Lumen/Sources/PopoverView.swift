@@ -33,14 +33,93 @@ struct PopoverView: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            header
-            tabBar
-            tabContent
+        VStack(spacing: 0) {
+            // Top content: header, tabs, scrolling tab body
+            VStack(spacing: 14) {
+                header
+                tabBar
+                tabContent
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            // Persistent footer — globally-relevant actions (Dashboard / Quit)
+            // that should be one click away from any tab, not just Monitor.
+            // Lives outside the scrolling content so it stays visible.
+            persistentFooter
         }
-        .padding(14)
         .frame(width: 400, height: 640)
         .background(Color(nsColor: NSColor(red: 0.04, green: 0.04, blue: 0.06, alpha: 1)))
+        .onReceive(NotificationCenter.default.publisher(for: .lumenShowTab)) { note in
+            if let raw = note.object as? String, let tab = AppTab(rawValue: raw) {
+                activeTab = tab
+            }
+        }
+    }
+
+    /// The Dashboard URL is hardcoded to the daemon's default API port. If a
+    /// user runs lumen-core with `--api-port N` for N ≠ 9091, this would
+    /// drift — but every other client-side reference (APIClient.baseURL,
+    /// build_dmg.sh, README) is also pinned to 9091, so consolidating later
+    /// is a single refactor, not piecemeal threading of the port through.
+    private static let dashboardURL = URL(string: "http://127.0.0.1:9091/dashboard")!
+
+    private var persistentFooter: some View {
+        HStack(spacing: 6) {
+            Button(action: {
+                NSWorkspace.shared.open(Self.dashboardURL)
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "safari")
+                        .font(.system(size: 9))
+                    Text("Dashboard")
+                        .font(.system(size: 10, weight: .medium))
+                        .textCase(.uppercase)
+                        .tracking(0.4)
+                }
+                .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.85))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7)
+                    .stroke(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.30), lineWidth: 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+
+            Button(action: { NSApp.terminate(nil) }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "power")
+                        .font(.system(size: 9))
+                    Text("Quit")
+                        .font(.system(size: 10, weight: .medium))
+                        .textCase(.uppercase)
+                        .tracking(0.4)
+                }
+                .foregroundStyle(.red.opacity(0.7))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color.red.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7)
+                    .stroke(Color.red.opacity(0.20), lineWidth: 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.white.opacity(0.02))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(Color.white.opacity(0.05)),
+            alignment: .top
+        )
     }
 
     private var header: some View {
@@ -109,6 +188,12 @@ struct PopoverView: View {
                 .padding(.vertical, 5)
                 .background(activeTab == tab ? Color.white.opacity(0.10) : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
+                // Without an explicit content shape, SwiftUI's .plain button
+                // style only treats the rendered text glyph as hit-testable —
+                // clicking the padded background area registered as "miss" and
+                // required pixel-precise aim. Rectangle() makes the full
+                // frame (incl. background) clickable.
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusable(false)
@@ -185,7 +270,12 @@ struct PopoverView: View {
             Spacer()
 
             if !apiClient.connected {
-                Button(action: { daemonManager.start() }) {
+                Button(action: {
+                    daemonManager.start()
+                    // Poll immediately after restart attempt so UI responds quickly
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { apiClient.pollNow() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { apiClient.pollNow() }
+                }) {
                     Text("Restart")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(color)
@@ -225,7 +315,7 @@ struct PopoverView: View {
                 value: apiClient.stats.sessionCost,
                 max: Swift.max(apiClient.stats.sessionCost * 2, 1),
                 label: "Lap Cost",
-                unit: "USD",
+                prefix: "$",
                 color: .orange,
                 size: 110
             )
@@ -241,7 +331,7 @@ struct PopoverView: View {
                 value: apiClient.stats.totalCost,
                 max: Swift.max(apiClient.stats.totalCost * 2, 0.1),
                 label: "Total",
-                unit: "USD",
+                prefix: "$",
                 color: .green,
                 size: 110
             )
@@ -646,10 +736,14 @@ struct PopoverView: View {
                     RoundedRectangle(cornerRadius: 7)
                         .stroke(Color.orange.opacity(0.35), lineWidth: 1)
                 )
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .focusable(false)
 
+            // Quit moved to the persistent footer (always visible regardless
+            // of tab). Lap + Clear stay here because they're context-specific
+            // to the Monitor view.
             Button(action: { Task { await apiClient.clearSession() } }) {
                 Text("Clear")
                     .font(.system(size: 10, weight: .medium))
@@ -664,24 +758,7 @@ struct PopoverView: View {
                         RoundedRectangle(cornerRadius: 7)
                             .stroke(Color.white.opacity(0.1), lineWidth: 1)
                     )
-            }
-            .buttonStyle(.plain)
-            .focusable(false)
-
-            Button(action: { NSApp.terminate(nil) }) {
-                Text("Quit")
-                    .font(.system(size: 10, weight: .medium))
-                    .textCase(.uppercase)
-                    .tracking(0.4)
-                    .foregroundStyle(.red.opacity(0.6))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .background(Color.red.opacity(0.06))
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7)
-                            .stroke(Color.red.opacity(0.15), lineWidth: 1)
-                    )
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .focusable(false)

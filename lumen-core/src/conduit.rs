@@ -12,6 +12,7 @@ use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use serde::Deserialize;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -303,19 +304,25 @@ pub async fn register_with_oauth_token(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Shared home_dir helper lives in crate::state — local alias keeps this file
+// short and avoids drifting from the rest of the codebase if the resolution
+// logic ever changes.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
-        .map(PathBuf::from)
+    crate::state::home_dir()
 }
 
+/// Write `content` to `path` with owner-only read/write permissions where
+/// the OS supports it. On Unix this means mode 0600; on Windows the file
+/// inherits the parent directory's ACL (Windows has no direct equivalent of
+/// chmod, and a robust ACL implementation would need the `winapi` crate —
+/// not worth it for credential files that live under the user's profile
+/// directory which is already access-controlled by the OS).
 fn write_file_private(path: PathBuf, content: &[u8]) -> Result<()> {
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut f = opts
         .open(&path)
         .with_context(|| format!("cannot open {} for writing", path.display()))?;
     f.write_all(content)

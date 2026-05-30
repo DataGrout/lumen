@@ -5,15 +5,17 @@ struct ArcGauge: View {
     let maxValue: Double
     let label: String
     let unit: String
+    let prefix: String
     let color: Color
     let size: CGFloat
 
     init(value: Double, max: Double, label: String, unit: String = "",
-         color: Color = .green, size: CGFloat = 110) {
+         prefix: String = "", color: Color = .green, size: CGFloat = 110) {
         self.value = value
         self.maxValue = Swift.max(max, 0.001)
         self.label = label
         self.unit = unit
+        self.prefix = prefix
         self.color = color
         self.size = size
     }
@@ -49,7 +51,7 @@ struct ArcGauge: View {
                 .animation(.easeInOut(duration: 0.5), value: fraction)
 
             VStack(spacing: 1) {
-                Text(displayValue)
+                Text(prefix + displayValue)
                     .font(.system(size: size * 0.19, weight: .bold, design: .rounded))
                     .foregroundStyle(color)
                     .monospacedDigit()

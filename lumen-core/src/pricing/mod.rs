@@ -160,6 +160,22 @@ impl PricingDatabase {
             Some(0.50),
             Some(6.25),
         );
+        db.add(
+            "anthropic",
+            "claude-opus-4-8",
+            5.00,
+            25.00,
+            Some(0.50),
+            Some(6.25),
+        );
+        db.add(
+            "anthropic",
+            "claude-opus-4-8-20260528",
+            5.00,
+            25.00,
+            Some(0.50),
+            Some(6.25),
+        );
 
         // Sonnet 4 family — $3/$15 tier
         db.add(

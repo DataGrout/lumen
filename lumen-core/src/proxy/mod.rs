@@ -1184,8 +1184,18 @@ mod tests {
     use super::*;
     use crate::ca::LumenCA;
     use crate::pricing::PricingDatabase;
+    use std::sync::Once;
+
+    // reqwest with `rustls-tls-no-provider` requires a crypto provider to be
+    // installed before Client::builder() is called. Once is process-global, so
+    // this runs at most once across all tests in this binary.
+    static CRYPTO_INIT: Once = Once::new();
+    fn ensure_crypto_installed() {
+        CRYPTO_INIT.call_once(crate::install_crypto_provider);
+    }
 
     fn test_proxy() -> LumenProxy {
+        ensure_crypto_installed();
         let agg = Arc::new(Aggregator::new(PricingDatabase::with_defaults()));
         let tl = Arc::new(TrafficLog::new());
         let ca = Arc::new(LumenCA::generate_ephemeral().unwrap());

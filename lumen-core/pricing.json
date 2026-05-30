@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-05-26",
+  "updated": "2026-05-28",
   "notes": {
     "cursor": "Cursor On-Demand effective blended rates, NOT Anthropic/OpenAI direct prices. Cursor caches conversation context very aggressively (>85% hit rate typical), and its binary protobuf responses do not expose cache_read_input_tokens the way the Anthropic JSON API does. BidiAppend calls carrying conversation history are filtered as proxy noise, so byte-estimated tokens are heavily skewed toward output_tokens. These rates are calibrated against observed Cursor On-Demand invoices to land within ~2x of actual billing. If Cursor ever exposes cache-aware token counts in its gRPC responses, raise these toward the underlying Anthropic/OpenAI direct rates.",
     "retired": "Model has been retired from the OpenAI product and/or API. Entries are kept for cost attribution of historical traffic. o1-preview shutdown 2025-07-28; o1-mini shutdown 2025-10-27; entire o-series retired from ChatGPT 2026-02-13 (API access may still function for existing integrations)."
@@ -14,6 +14,8 @@
     { "provider": "anthropic", "model": "claude-opus-4-5-20251101",    "input_per_mtok":  5.00, "output_per_mtok": 25.00, "cache_read_per_mtok": 0.50,   "cache_write_per_mtok":  6.25 },
     { "provider": "anthropic", "model": "claude-opus-4-6",             "input_per_mtok":  5.00, "output_per_mtok": 25.00, "cache_read_per_mtok": 0.50,   "cache_write_per_mtok":  6.25 },
     { "provider": "anthropic", "model": "claude-opus-4-7",             "input_per_mtok":  5.00, "output_per_mtok": 25.00, "cache_read_per_mtok": 0.50,   "cache_write_per_mtok":  6.25 },
+    { "provider": "anthropic", "model": "claude-opus-4-8",             "input_per_mtok":  5.00, "output_per_mtok": 25.00, "cache_read_per_mtok": 0.50,   "cache_write_per_mtok":  6.25 },
+    { "provider": "anthropic", "model": "claude-opus-4-8-20260528",    "input_per_mtok":  5.00, "output_per_mtok": 25.00, "cache_read_per_mtok": 0.50,   "cache_write_per_mtok":  6.25 },
 
     { "provider": "anthropic", "model": "claude-sonnet-4-20250514",    "input_per_mtok":  3.00, "output_per_mtok": 15.00, "cache_read_per_mtok": 0.30,   "cache_write_per_mtok":  3.75 },
     { "provider": "anthropic", "model": "claude-sonnet-4-0",           "input_per_mtok":  3.00, "output_per_mtok": 15.00, "cache_read_per_mtok": 0.30,   "cache_write_per_mtok":  3.75 },

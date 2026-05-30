@@ -231,9 +231,15 @@ final class APIClient {
     var routes: [RelayRoute] = []
     var caInfo: CAInfo?
     var dgStatus: DGStatus?
+    /// Whether the Lumen CA is trusted in the user's login keychain. Refreshed
+    /// every ~5 s on a background queue (see refreshCATrust), so the right-click
+    /// menu and Settings view can read it instantly without blocking on a
+    /// `security dump-trust-settings` subprocess at draw time.
+    var caTrusted: Bool = false
 
     private let baseURL = "http://127.0.0.1:9091"
     private var pollTimer: Timer?
+    private var trustCheckTimer: Timer?
     private var lastTrafficRevision: UInt64 = 0
     private let apiToken: String? = {
         let path = URL(fileURLWithPath: NSHomeDirectory())
@@ -248,16 +254,65 @@ final class APIClient {
 
     func startPolling() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        trustCheckTimer?.invalidate()
+
+        // Use .common modes so the timer keeps firing while NSPopover is open
+        // (popover can hold the runloop in event-tracking mode, which would
+        // otherwise pause a default-mode timer — symptom: UI stops updating
+        // until the popover is closed and reopened).
+        let timer = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { await self.poll() }
         }
+        timer.tolerance = 0.15   // lets the OS coalesce wakeups — battery friendly
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
         Task { await poll() }
+
+        // CA trust check runs less often than the main poll (it spawns a
+        // subprocess) and on its own dedicated timer so it's easy to tune
+        // independently. First check is immediate; subsequent every 5 s.
+        refreshCATrust()
+        let trustTimer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.refreshCATrust()
+        }
+        trustTimer.tolerance = 1.0
+        RunLoop.main.add(trustTimer, forMode: .common)
+        trustCheckTimer = trustTimer
     }
 
     func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
+        trustCheckTimer?.invalidate()
+        trustCheckTimer = nil
+    }
+
+    /// Runs `security dump-trust-settings` on a background queue and updates
+    /// `caTrusted` on the main actor. Safe to call frequently — work is
+    /// effectively bounded to one subprocess spawn per call.
+    func refreshCATrust() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let proc = Process()
+            let pipe = Pipe()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            proc.arguments = ["dump-trust-settings"]
+            proc.standardOutput = pipe
+            proc.standardError = Pipe()
+            try? proc.run()
+            proc.waitUntilExit()
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                             encoding: .utf8) ?? ""
+            let trusted = out.localizedCaseInsensitiveContains("Lumen Local CA")
+            DispatchQueue.main.async {
+                self?.caTrusted = trusted
+            }
+        }
+    }
+
+    /// Trigger an immediate out-of-band poll, e.g. after a restart action.
+    func pollNow() {
+        Task { await poll() }
     }
 
     private func poll() async {
@@ -267,9 +322,7 @@ final class APIClient {
         await fetchHosts()
         await fetchRoutes()
         await fetchLaps()
-        if caInfo == nil {
-            await fetchCAInfo()
-        }
+        await fetchCAInfo()
         await fetchDGStatus()
         await fetchDGConfig()
         if trafficTabActive {

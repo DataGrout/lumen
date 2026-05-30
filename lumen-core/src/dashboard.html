@@ -228,6 +228,196 @@
     height: 32px;
     margin-top: 4px;
   }
+
+  /* ── Action bar (Clear, New Lap) ──────────────────────────── */
+  .action-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .btn:hover     { background: #ffffff10; border-color: var(--muted); }
+  .btn-primary   { color: var(--accent); border-color: #00ccff33; }
+  .btn-primary:hover { background: #00ccff10; }
+  .btn-danger    { color: var(--red); border-color: #ff445533; }
+  .btn-danger:hover  { background: #ff445510; }
+  .btn-ghost     { color: var(--muted); border: none; padding: 2px 6px; font-size: 14px; }
+  .btn-ghost:hover { color: var(--red); background: transparent; }
+  .btn-small     { padding: 3px 8px; font-size: 10px; }
+  .btn-toggle    {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    text-align: left;
+    width: 100%;
+    padding: 7px 12px;
+    margin-bottom: 14px;
+  }
+  .btn-toggle:hover { color: var(--text); }
+  .btn-toggle::after { content: '▾'; float: right; transition: transform 0.2s; }
+  .btn-toggle.open::after { transform: rotate(180deg); }
+
+  /* ── Settings panel ───────────────────────────────────────── */
+  #settings { display: none; margin-bottom: 14px; }
+  #settings.open { display: block; }
+
+  .settings-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .settings-block h3 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .row:last-child { border-bottom: none; }
+  .row .key {
+    color: var(--accent);
+    min-width: 80px;
+    font-size: 11px;
+  }
+  .row .val {
+    color: var(--text);
+    flex: 1;
+    word-break: break-all;
+    font-size: 11px;
+  }
+  .row .meta { color: var(--muted); font-size: 11px; }
+
+  .copy-btn {
+    color: var(--muted);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 4px;
+  }
+  .copy-btn:hover { color: var(--accent); }
+  .copy-btn.copied { color: var(--green); }
+
+  .input-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .input-row input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 5px 8px;
+    border-radius: 3px;
+    outline: none;
+  }
+  .input-row input:focus { border-color: var(--accent); }
+  .input-row input.narrow { max-width: 110px; }
+
+  /* Platform tabs for trust install instructions */
+  .tabs {
+    display: flex;
+    gap: 0;
+    margin-top: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 6px 12px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .tab-panel { display: none; padding-top: 8px; }
+  .tab-panel.active { display: block; }
+
+  pre.code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: var(--text);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 4px 0;
+  }
+
+  .status-pill {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  .status-pill.green { background: #00ff8822; color: var(--green); }
+  .status-pill.muted { background: #ffffff10; color: var(--muted); }
+
+  .hint {
+    color: var(--muted);
+    font-size: 10px;
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+  .hint a { color: var(--accent); text-decoration: none; }
+  .hint a:hover { text-decoration: underline; }
+
+  .toast {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 11px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .toast.success { border-color: #00ff8855; color: var(--green); }
+  .toast.error   { border-color: #ff445555; color: var(--red); }
 </style>
 </head>
 <body>
@@ -297,7 +487,115 @@
   </table>
 </div>
 
+<!-- Action bar -->
+<div class="action-bar">
+  <button class="btn btn-primary" id="btn-new-lap">+ New Lap</button>
+  <button class="btn btn-danger"  id="btn-clear">Clear Session</button>
+</div>
+
+<!-- Settings toggle -->
+<button class="btn btn-toggle" id="btn-settings-toggle">Settings &amp; Configuration</button>
+
+<div id="settings">
+  <!-- Quick setup URLs -->
+  <div class="settings-block">
+    <h3>Quick Setup</h3>
+    <div id="setup-urls"></div>
+    <div class="hint">Point your LLM client at one of the URLs above (sets <code>ANTHROPIC_BASE_URL</code>, <code>OPENAI_BASE_URL</code>, etc).</div>
+  </div>
+
+  <!-- Launch Your Client -->
+  <div class="settings-block">
+    <h3>Launch Your Client</h3>
+    <div class="tabs" id="launch-tabs">
+      <button class="tab" data-platform="macos">macOS</button>
+      <button class="tab" data-platform="linux">Linux</button>
+      <button class="tab" data-platform="windows">Windows</button>
+    </div>
+    <div class="tab-panel" id="launch-macos"></div>
+    <div class="tab-panel" id="launch-linux"></div>
+    <div class="tab-panel" id="launch-windows"></div>
+    <div class="hint" style="margin-top:8px">
+      Paste into a terminal. Env vars stay set for the shell session — re-export in any new terminal.
+      Relay-mode clients (Claude Code, OpenCode) skip CA trust entirely;
+      proxy-mode clients (Cursor, Claude Desktop) need the CA installed first (see TLS Certificate below).
+    </div>
+  </div>
+
+  <!-- Monitored hosts -->
+  <div class="settings-block">
+    <h3>Monitored Hosts</h3>
+    <div id="hosts-list"></div>
+    <div class="input-row">
+      <input id="host-input" type="text" placeholder="e.g. api.together.xyz" autocomplete="off">
+      <button class="btn btn-small btn-primary" id="btn-add-host">Add</button>
+    </div>
+    <div class="hint">Hosts whose HTTPS traffic Lumen will intercept and parse for token usage.</div>
+  </div>
+
+  <!-- Relay routes -->
+  <div class="settings-block">
+    <h3>Relay Routes</h3>
+    <div id="routes-list"></div>
+    <div class="input-row">
+      <input id="route-prefix-input"   type="text" placeholder="/prefix"             autocomplete="off" class="narrow">
+      <input id="route-upstream-input" type="text" placeholder="https://upstream.host" autocomplete="off">
+      <button class="btn btn-small btn-primary" id="btn-add-route">Add</button>
+    </div>
+    <div class="hint">Plain-HTTP relay endpoints — clients send to <code>http://localhost:9090/&lt;prefix&gt;</code> and the daemon re-originates HTTPS to the upstream. No CA trust required.</div>
+  </div>
+
+  <!-- Certificate -->
+  <div class="settings-block">
+    <h3>TLS Certificate (for HTTPS proxy mode)</h3>
+    <div id="ca-info">
+      <div class="row"><span class="key">Status</span><span class="val meta">loading…</span></div>
+    </div>
+    <div class="input-row" style="margin-top:6px">
+      <a class="btn btn-small btn-primary" id="btn-download-ca" download="lumen-ca.pem" style="text-decoration:none;display:inline-block">Download ca.pem</a>
+    </div>
+
+    <div class="tabs" id="trust-tabs">
+      <button class="tab" data-platform="macos">macOS</button>
+      <button class="tab" data-platform="linux">Linux</button>
+      <button class="tab" data-platform="windows">Windows</button>
+    </div>
+    <div class="tab-panel" id="trust-macos">
+      <pre class="code">sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain \
+  ~/Downloads/lumen-ca.pem</pre>
+      <div class="hint">Or use the Lumen menu bar app: <strong>Settings → Certificate → Trust CA</strong>.</div>
+    </div>
+    <div class="tab-panel" id="trust-linux">
+      <pre class="code"># Debian / Ubuntu
+sudo cp ~/Downloads/lumen-ca.pem /usr/local/share/ca-certificates/lumen-ca.crt
+sudo update-ca-certificates
+
+# Fedora / RHEL
+sudo cp ~/Downloads/lumen-ca.pem /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust</pre>
+    </div>
+    <div class="tab-panel" id="trust-windows">
+      <pre class="code"># PowerShell (run as Administrator):
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\lumen-ca.pem" `
+  -CertStoreLocation Cert:\LocalMachine\Root</pre>
+      <div class="hint">Or double-click <code>lumen-ca.pem</code> → Install Certificate → Local Machine → Trusted Root Certification Authorities.</div>
+    </div>
+    <div class="hint" style="margin-top:8px">Only needed for proxy-mode clients (Claude Desktop, Cursor). Relay-mode clients (Claude Code, OpenCode) don't require CA trust.</div>
+  </div>
+
+  <!-- DataGrout -->
+  <div class="settings-block">
+    <h3>DataGrout</h3>
+    <div id="dg-status">
+      <div class="row"><span class="key">Status</span><span class="val meta">loading…</span></div>
+    </div>
+    <div class="hint" id="dg-hint" style="margin-top:8px"></div>
+  </div>
+</div>
+
 <footer id="footer-text">lumen · http://127.0.0.1:9091</footer>
+<div class="toast" id="toast"></div>
 </div>
 
 <script>
@@ -463,6 +761,451 @@
 
   tick();
   setInterval(tick, 2000);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Band 1 — management UI (hosts, routes, CA, DG status, session actions)
+  // All endpoints below already exist on the daemon; the dashboard is just
+  // a UI on top. Keeping the implementation in this file (no module split)
+  // matches the existing style — the dashboard is `include_str!`-embedded.
+  // ─────────────────────────────────────────────────────────────────────
+
+  function showToast(msg, kind = 'success') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + kind;
+    setTimeout(() => { t.className = 'toast'; }, 2200);
+  }
+
+  async function apiJson(method, path, body = null) {
+    const opts = { method, headers: { ...HEADERS } };
+    if (body !== null) {
+      opts.headers['content-type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(API + path, opts);
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      throw new Error(`${r.status} ${r.statusText} — ${text || path}`);
+    }
+    return r.headers.get('content-type')?.includes('json') ? r.json() : r.text();
+  }
+
+  // ── Action bar buttons ──────────────────────────────────────────────
+  document.getElementById('btn-new-lap').addEventListener('click', async () => {
+    try {
+      await apiJson('POST', '/lap');
+      showToast('Lap created');
+      tick();
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', async () => {
+    if (!confirm('Clear current session? Stats and events will be reset (lap history is preserved).')) return;
+    try {
+      await apiJson('POST', '/clear');
+      showToast('Session cleared');
+      // Reset client-side seen-ids so the feed redraws cleanly.
+      seenIds.clear();
+      document.getElementById('event-feed').innerHTML = '<div class="empty-state" id="feed-empty">No events yet — start proxying traffic.</div>';
+      tick();
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  // ── Settings toggle ─────────────────────────────────────────────────
+  const settingsPanel  = document.getElementById('settings');
+  const settingsToggle = document.getElementById('btn-settings-toggle');
+  settingsToggle.addEventListener('click', () => {
+    const open = settingsPanel.classList.toggle('open');
+    settingsToggle.classList.toggle('open', open);
+    if (open) refreshSettings();   // pull fresh data on expand
+  });
+
+  async function refreshSettings() {
+    // Independent fetches so a single failure doesn't blank the whole panel.
+    refreshHosts();
+    refreshRoutes();
+    refreshSetupUrls();
+    refreshCA();
+    refreshDG();
+  }
+
+  // ── Monitored hosts ─────────────────────────────────────────────────
+  async function refreshHosts() {
+    const list = document.getElementById('hosts-list');
+    try {
+      const hosts = await apiJson('GET', '/hosts');
+      list.innerHTML = hosts.length === 0
+        ? '<div class="hint">No hosts configured. Add one below.</div>'
+        : hosts.map(h => `
+            <div class="row">
+              <span class="val">${h}</span>
+              <button class="btn-ghost" data-host="${h}" title="Remove">×</button>
+            </div>`).join('');
+      list.querySelectorAll('button[data-host]').forEach(b =>
+        b.addEventListener('click', () => removeHost(b.dataset.host)));
+    } catch (e) {
+      list.innerHTML = `<div class="hint" style="color:var(--red)">${e.message}</div>`;
+    }
+  }
+  async function removeHost(h) {
+    try { await apiJson('DELETE', '/hosts/' + encodeURIComponent(h)); showToast('Removed ' + h); refreshHosts(); }
+    catch (e) { showToast(e.message, 'error'); }
+  }
+  document.getElementById('btn-add-host').addEventListener('click', async () => {
+    const input = document.getElementById('host-input');
+    const host = input.value.trim();
+    if (!host) return;
+    try { await apiJson('POST', '/hosts', { host }); input.value = ''; showToast('Added ' + host); refreshHosts(); }
+    catch (e) { showToast(e.message, 'error'); }
+  });
+
+  // ── Relay routes ────────────────────────────────────────────────────
+  async function refreshRoutes() {
+    const list = document.getElementById('routes-list');
+    try {
+      const routes = await apiJson('GET', '/routes');
+      list.innerHTML = routes.length === 0
+        ? '<div class="hint">No routes configured.</div>'
+        : routes.map(r => `
+            <div class="row">
+              <span class="key">${r.prefix}</span>
+              <span class="val">${r.upstream}</span>
+              <button class="btn-ghost" data-prefix="${r.prefix}" title="Remove">×</button>
+            </div>`).join('');
+      list.querySelectorAll('button[data-prefix]').forEach(b =>
+        b.addEventListener('click', () => removeRoute(b.dataset.prefix)));
+    } catch (e) {
+      list.innerHTML = `<div class="hint" style="color:var(--red)">${e.message}</div>`;
+    }
+  }
+  async function removeRoute(prefix) {
+    const stripped = prefix.startsWith('/') ? prefix.slice(1) : prefix;
+    try { await apiJson('DELETE', '/routes/' + stripped); showToast('Removed ' + prefix); refreshRoutes(); refreshSetupUrls(); }
+    catch (e) { showToast(e.message, 'error'); }
+  }
+  document.getElementById('btn-add-route').addEventListener('click', async () => {
+    const prefixInput   = document.getElementById('route-prefix-input');
+    const upstreamInput = document.getElementById('route-upstream-input');
+    const prefix   = prefixInput.value.trim();
+    const upstream = upstreamInput.value.trim();
+    if (!prefix || !upstream) { showToast('Both fields required', 'error'); return; }
+    try {
+      await apiJson('POST', '/routes', { prefix, upstream });
+      prefixInput.value = ''; upstreamInput.value = '';
+      showToast('Added ' + prefix);
+      refreshRoutes();
+      refreshSetupUrls();
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  // ── Quick setup URLs + Launch commands ──────────────────────────────
+  // These two sections share a refresh trigger because both depend on the
+  // current proxy port (and the launch section also depends on CA path).
+  async function refreshSetupUrls() {
+    const container = document.getElementById('setup-urls');
+    try {
+      const [routes, proxyCfg, caInfo] = await Promise.all([
+        apiJson('GET', '/routes'),
+        apiJson('GET', '/proxy/config'),
+        apiJson('GET', '/ca/info').catch(() => ({})),  // non-fatal
+      ]);
+      const port = proxyCfg.port || 9090;
+      const host = location.hostname || '127.0.0.1';
+      const caPath = caInfo.path || '~/.lumen/ca.pem';
+
+      // Quick Setup URL rows (one per relay route).
+      container.innerHTML = '';
+      routes.forEach(r => {
+        const url = `http://${host}:${port}${r.prefix}`;
+        const div = document.createElement('div');
+        div.className = 'row';
+        div.innerHTML = `
+          <span class="key">${providerLabel(r.prefix)}</span>
+          <span class="val">${url}</span>
+          <button class="copy-btn" title="Copy">⧉</button>`;
+        div.querySelector('.copy-btn').addEventListener(
+          'click', e => copyToClipboard(e.currentTarget, url));
+        container.appendChild(div);
+      });
+
+      // Re-render Launch panels with current port + CA path.
+      renderLaunchCommands(host, port, caPath);
+    } catch (e) {
+      container.innerHTML = `<div class="hint" style="color:var(--red)">${e.message}</div>`;
+    }
+  }
+
+  function providerLabel(prefix) {
+    const p = prefix.replace(/^\//, '');
+    return ({ openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google' }[p]) || p;
+  }
+
+  // copyToClipboard accepts an optional explicit text argument so callers can
+  // close over the value (avoids escaping issues in data-* attributes).
+  function copyToClipboard(btn, text) {
+    const value = text != null ? text : btn.dataset.copy;
+    navigator.clipboard.writeText(value).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = '✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 900);
+    }).catch(() => showToast('Clipboard blocked — select and copy manually', 'error'));
+  }
+
+  // ── Launch Your Client — per-platform paste-able commands ───────────
+  // No new daemon endpoints; we just show the user the exact command. Same
+  // effective outcome as the macOS menu app's Launch tab, with zero new
+  // attack surface (no process spawn from a browser request).
+  function renderLaunchCommands(host, port, caPath) {
+    // Windows uses backslash paths and PowerShell env-var syntax. The CA
+    // path the daemon reports is the Unix-style $HOME/.lumen/ca.pem path —
+    // convert to PowerShell form for the Windows panel.
+    const winCAPath = caPath.startsWith('/Users/') || caPath.startsWith('/home/')
+      ? '$env:USERPROFILE\\.lumen\\ca.pem'
+      : caPath.replace(/\//g, '\\');
+
+    const relayUrl = `http://${host}:${port}/anthropic`;
+    const proxyUrl = `http://${host}:${port}`;
+
+    const platforms = {
+      macos: [
+        { label: 'Claude Code',    cmd: `ANTHROPIC_BASE_URL=${relayUrl} claude` },
+        { label: 'OpenCode',       cmd: `ANTHROPIC_BASE_URL=${relayUrl} opencode` },
+        { label: 'Cursor',         cmd: `HTTPS_PROXY=${proxyUrl} NODE_EXTRA_CA_CERTS=${caPath} /Applications/Cursor.app/Contents/MacOS/Cursor` },
+        { label: 'Claude Desktop', cmd: `HTTPS_PROXY=${proxyUrl} NODE_EXTRA_CA_CERTS=${caPath} /Applications/Claude.app/Contents/MacOS/Claude` },
+      ],
+      linux: [
+        { label: 'Claude Code',    cmd: `ANTHROPIC_BASE_URL=${relayUrl} claude` },
+        { label: 'OpenCode',       cmd: `ANTHROPIC_BASE_URL=${relayUrl} opencode` },
+        { label: 'Cursor',         cmd: `HTTPS_PROXY=${proxyUrl} NODE_EXTRA_CA_CERTS=${caPath} cursor` },
+      ],
+      windows: [
+        { label: 'Claude Code',    cmd: `$env:ANTHROPIC_BASE_URL="${relayUrl}"; claude` },
+        { label: 'OpenCode',       cmd: `$env:ANTHROPIC_BASE_URL="${relayUrl}"; opencode` },
+        { label: 'Cursor',         cmd: `$env:HTTPS_PROXY="${proxyUrl}"; $env:NODE_EXTRA_CA_CERTS="${winCAPath}"; & "$env:LOCALAPPDATA\\Programs\\cursor\\Cursor.exe"` },
+        { label: 'Claude Desktop', cmd: `$env:HTTPS_PROXY="${proxyUrl}"; $env:NODE_EXTRA_CA_CERTS="${winCAPath}"; & "$env:LOCALAPPDATA\\AnthropicClaude\\Claude.exe"` },
+      ],
+    };
+
+    for (const [platform, rows] of Object.entries(platforms)) {
+      const panel = document.getElementById('launch-' + platform);
+      if (!panel) continue;
+      panel.innerHTML = '';
+      rows.forEach(r => {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.style.alignItems = 'flex-start';
+        row.innerHTML = `
+          <span class="key" style="padding-top:3px">${r.label}</span>
+          <code style="flex:1;font-size:10px;color:var(--text);word-break:break-all;padding:3px 0"></code>
+          <button class="copy-btn" title="Copy" style="padding-top:3px">⧉</button>`;
+        row.querySelector('code').textContent = r.cmd;
+        const btn = row.querySelector('.copy-btn');
+        btn.addEventListener('click', () => copyToClipboard(btn, r.cmd));
+        panel.appendChild(row);
+      });
+    }
+  }
+
+  // Mirror the cert-trust tab pattern: default to the user's apparent
+  // platform, swap panels on click.
+  (function setupLaunchTabs() {
+    const ua = navigator.userAgent.toLowerCase();
+    const platform = ua.includes('win')   ? 'windows'
+                   : ua.includes('mac')   ? 'macos'
+                   : 'linux';
+    const select = (p) => {
+      document.querySelectorAll('#launch-tabs .tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.platform === p));
+      ['macos', 'linux', 'windows'].forEach(plat => {
+        const panel = document.getElementById('launch-' + plat);
+        if (panel) panel.classList.toggle('active', plat === p);
+      });
+    };
+    document.querySelectorAll('#launch-tabs .tab').forEach(t =>
+      t.addEventListener('click', () => select(t.dataset.platform)));
+    select(platform);
+  })();
+
+  // ── Certificate info + platform-specific trust instructions ─────────
+  async function refreshCA() {
+    const info = document.getElementById('ca-info');
+    try {
+      const ca = await apiJson('GET', '/ca/info');
+      const path = ca.path || '~/.lumen/ca.pem';
+      info.innerHTML = `
+        <div class="row"><span class="key">Subject</span><span class="val">${ca.subject || '—'}</span></div>
+        <div class="row"><span class="key">Path</span><span class="val">${path}</span></div>
+      `;
+      // /ca/pem is auth-exempt (the cert is public) — simple <a download> works.
+      const dl = document.getElementById('btn-download-ca');
+      dl.href = API + '/ca/pem';
+    } catch (e) {
+      info.innerHTML = `<div class="hint" style="color:var(--red)">${e.message}</div>`;
+    }
+  }
+
+  // Default trust-tab to the user's apparent platform.
+  (function setupTrustTabs() {
+    const ua = navigator.userAgent.toLowerCase();
+    const platform = ua.includes('win')   ? 'windows'
+                   : ua.includes('mac')   ? 'macos'
+                   : 'linux';
+    const select = (p) => {
+      document.querySelectorAll('#trust-tabs .tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.platform === p));
+      document.querySelectorAll('#settings .tab-panel').forEach(panel =>
+        panel.classList.toggle('active', panel.id === 'trust-' + p));
+    };
+    document.querySelectorAll('#trust-tabs .tab').forEach(t =>
+      t.addEventListener('click', () => select(t.dataset.platform)));
+    select(platform);
+  })();
+
+  // ── DataGrout connect / disconnect flow ─────────────────────────────
+  // The daemon does all the OAuth heavy lifting (DCR registration, PKCE,
+  // callback handling). The dashboard's job is just to (a) POST /dg/dcr to
+  // kick the flow off, (b) open the returned auth_url in a new tab, and
+  // (c) poll /dg/dcr/status until Complete. This is the same flow the macOS
+  // menu app uses — nothing about it is platform-specific.
+  let dgPollTimer = null;
+
+  function stopDgPolling() {
+    if (dgPollTimer) { clearInterval(dgPollTimer); dgPollTimer = null; }
+  }
+
+  async function refreshDG() {
+    const status = document.getElementById('dg-status');
+    const hint   = document.getElementById('dg-hint');
+    try {
+      const dg = await apiJson('GET', '/dg/status');
+      if (dg.connected) {
+        // Connected state: show details + Disconnect.
+        stopDgPolling();
+        status.innerHTML = `
+          <div class="row">
+            <span class="key">Status</span>
+            <span class="val"><span class="status-pill green">Connected</span></span>
+          </div>
+          ${dg.sub_id     ? `<div class="row"><span class="key">Sub ID</span><span class="val">${dg.sub_id}</span></div>` : ''}
+          ${dg.server_url ? `<div class="row"><span class="key">Server</span><span class="val">${dg.server_url}</span></div>` : ''}
+          <div class="input-row" style="margin-top:8px">
+            <button class="btn btn-small btn-danger" id="btn-dg-disconnect">Disconnect</button>
+          </div>`;
+        document.getElementById('btn-dg-disconnect').addEventListener('click', disconnectDG);
+        hint.innerHTML = 'Usage events sync every 30s. Disconnecting clears the local identity files in <code>~/.conduit/</code>.';
+      } else if (dgPollTimer) {
+        // Connecting state: a flow is in progress; just keep the waiting view.
+        // (The poll itself will replace this once status flips.)
+      } else {
+        // Idle state: show server URL input + Connect button.
+        status.innerHTML = `
+          <div class="row">
+            <span class="key">Status</span>
+            <span class="val"><span class="status-pill muted">Not connected</span></span>
+          </div>
+          <div class="input-row" style="margin-top:8px">
+            <input id="dg-server-input" type="text"
+                   placeholder="https://datagrout.ai/servers/&lt;uuid&gt;"
+                   autocomplete="off">
+            <button class="btn btn-small btn-primary" id="btn-dg-connect">Connect</button>
+          </div>`;
+        document.getElementById('btn-dg-connect').addEventListener('click', connectDG);
+        document.getElementById('dg-server-input').addEventListener('keydown', e => {
+          if (e.key === 'Enter') connectDG();
+        });
+        hint.innerHTML =
+          'Paste your DataGrout server URL (root or per-server MCP URL works). A new tab will open for sign-in; this page will refresh once auth completes.';
+      }
+    } catch (e) {
+      status.innerHTML = `<div class="hint" style="color:var(--red)">${e.message}</div>`;
+      hint.textContent = '';
+    }
+  }
+
+  async function connectDG() {
+    const input = document.getElementById('dg-server-input');
+    const serverUrl = input.value.trim();
+    if (!serverUrl) { showToast('Server URL required', 'error'); return; }
+
+    // Use a device name that distinguishes browser-initiated connects from
+    // the menu app's, so DG-side audit logs can tell them apart.
+    const deviceName = 'lumen-browser (' + navigator.platform + ')';
+
+    let auth_url;
+    try {
+      const resp = await apiJson('POST', '/dg/dcr', { server_url: serverUrl, device_name: deviceName });
+      auth_url = resp.auth_url;
+      if (!auth_url) throw new Error('daemon did not return an auth_url');
+    } catch (e) {
+      showToast(e.message, 'error');
+      return;
+    }
+
+    // Flip to the "waiting" view, then open the auth URL in a new tab.
+    const status = document.getElementById('dg-status');
+    const hint   = document.getElementById('dg-hint');
+    status.innerHTML = `
+      <div class="row">
+        <span class="key">Status</span>
+        <span class="val"><span class="status-pill" style="background:#ffcc0022;color:var(--yellow)">Waiting for sign-in</span></span>
+      </div>
+      <div class="input-row" style="margin-top:8px">
+        <a class="btn btn-small" href="${auth_url}" target="_blank" rel="noopener">Reopen sign-in tab</a>
+        <button class="btn btn-small btn-ghost" id="btn-dg-cancel" style="border:1px solid var(--border);padding:3px 8px;font-size:10px;color:var(--muted)">Cancel</button>
+      </div>`;
+    hint.innerHTML = 'Complete sign-in in the new tab. The dashboard will update automatically once the daemon receives the callback.';
+    document.getElementById('btn-dg-cancel').addEventListener('click', () => {
+      stopDgPolling();
+      refreshDG();
+    });
+
+    // Pop the OAuth tab. Some browsers block window.open from non-user gestures;
+    // since this is fired directly from the click handler, it should be allowed.
+    const opened = window.open(auth_url, '_blank', 'noopener');
+    if (!opened) {
+      showToast('Pop-up blocked — use the "Reopen sign-in tab" link', 'error');
+    }
+
+    // Poll the daemon for flow completion. The daemon writes to dcr_flow
+    // when the OAuth callback hits /dg/oauth/callback.
+    stopDgPolling();
+    let attempts = 0;
+    dgPollTimer = setInterval(async () => {
+      attempts++;
+      try {
+        const { status: s, error } = await apiJson('GET', '/dg/dcr/status');
+        if (s === 'complete') {
+          stopDgPolling();
+          showToast('Connected to DataGrout', 'success');
+          refreshDG();
+        } else if (s === 'failed') {
+          stopDgPolling();
+          showToast('Connect failed: ' + (error || 'unknown'), 'error');
+          refreshDG();
+        }
+        // Stop after ~5 min if the user abandons the flow.
+        if (attempts > 300) {
+          stopDgPolling();
+          showToast('Sign-in timed out — try again', 'error');
+          refreshDG();
+        }
+      } catch (e) {
+        // Transient network blip — let the next tick retry.
+      }
+    }, 1000);
+  }
+
+  async function disconnectDG() {
+    if (!confirm('Disconnect from DataGrout? Local identity files in ~/.conduit/ will be removed. (Re-connect any time.)')) return;
+    try {
+      await apiJson('DELETE', '/dg/identity');
+      showToast('Disconnected');
+      refreshDG();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  }
 </script>
 </body>
 </html>

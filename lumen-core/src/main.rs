@@ -27,13 +27,41 @@ fn parse_port_arg(args: &[String], flag: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
+/// Used by macOS-only `--transparent` and passive-feature `--passive` flag
+/// detection. On Windows (no macOS, no passive feature), nothing calls this
+/// — the `allow(dead_code)` keeps the build quiet rather than threading
+/// duplicate `#[cfg]` predicates through the call sites.
+#[allow(dead_code)]
 fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
 }
 
+// rustls crypto backend — selected at compile time via Cargo features:
+//   crypto-ring (default)  : pure Rust+asm, no C toolchain, cross-compiles freely
+//   crypto-aws-lc          : AWS-LC backend, required for FIPS 140-3 environments
+// Both backends are runtime-equivalent for everything lumen-core does (TLS MITM,
+// reqwest outbound). See README "Crypto Backend" for trade-offs.
+// pub so tests in submodules can call it (binary crates expose `crate::*` to
+// their own #[cfg(test)] modules).
+#[cfg(all(feature = "crypto-ring", not(feature = "crypto-aws-lc")))]
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+#[cfg(feature = "crypto-aws-lc")]
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
+#[cfg(not(any(feature = "crypto-ring", feature = "crypto-aws-lc")))]
+compile_error!(
+    "lumen-core requires exactly one crypto backend feature: \
+     `crypto-ring` (default) or `crypto-aws-lc`"
+);
+
 #[tokio::main]
 async fn main() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    install_crypto_provider();
 
     // RUST_LOG takes full control when set; otherwise default to info for lumen_core.
     let filter =
@@ -159,6 +187,10 @@ async fn main() {
         tracing::info!("Passive packet capture enabled");
     }
 
+    // `mut` is required on macOS / with the `passive` feature; without those,
+    // nothing pushes to the vec — silence the warning rather than splitting
+    // into platform-specific bindings.
+    #[allow(unused_mut)]
     let mut mode_parts = vec![
         format!("proxy :{}", proxy_port),
         format!("API :{}", api_port),

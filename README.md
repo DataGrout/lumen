@@ -32,25 +32,29 @@ Two processes, zero npm dependencies:
 
 ## Features
 
-- **Live gauges** -- Cost, token rate, and cache savings displayed as real-time arc meters
+- **Live gauges** -- Lap cost (`$`), token rate, and total spend displayed as real-time arc meters
 - **Multi-provider** -- OpenAI, Anthropic, Cursor, and Google AI supported out of the box
 - **Token breakdown** -- Input vs output with cache hit visualization
 - **Event feed** -- Scrollable log of every API call with model, tokens, and cost
 - **Lap tracking** -- Lap button marks a session boundary for before/after cost comparisons
+- **Right-click menu** -- Status bar icon supports right-click for quick spending summary, lap creation, tab navigation, app launchers, and quit
 - **Endpoint monitoring** -- See exactly which URLs are intercepted and what data is captured
 - **Custom endpoints** -- Whitelist additional hosts (local LLMs, hosted models, MCP servers)
 - **DataGrout integration** -- Toggle DG tools visibility and Intelligent Interface
+- **Configurable crypto backend** -- Default `ring` (cross-platform, no C toolchain); opt into `aws-lc-rs` for FIPS environments
 - **Privacy-first** -- In normal operation, only token counts and pricing metadata are captured; message content is never stored or transmitted. An opt-in debug capture mode (`POST /api/debug/arm`) can temporarily buffer raw request/response payloads in memory for diagnostics -- it is off by default and payloads are cleared on disarm.
 
 ## Platform Support
 
 | Platform | Interface | Status |
 |---|---|---|
-| macOS | Native status bar app + browser dashboard | ✓ |
+| macOS (Apple Silicon + Intel) | Native status bar app + browser dashboard | ✓ |
 | Linux | Browser dashboard | ✓ |
 | Windows | Browser dashboard | ✓ |
 
-The `lumen-core` daemon is pure Rust and runs on any platform. The macOS Swift app is optional -- on Linux and Windows, open `http://127.0.0.1:9091/dashboard` in any browser to get a live dashboard with the same stats, event feed, and lap history.
+The `lumen-core` daemon is pure Rust and runs on all three platforms. The macOS Swift app is optional -- on Linux and Windows, open `http://127.0.0.1:9091/dashboard` in any browser to get a live dashboard with the same stats, event feed, and lap history.
+
+The macOS DMG produced by `scripts/build_dmg.sh` is a **universal binary** -- a single download works on both Apple Silicon and Intel Macs (macOS 14+). Windows native execution is covered by CI (a `windows-latest` runner builds and runs the test suite on every PR). Cross-compiling a Windows `.exe` from a Mac is documented under Installation.
 
 ## Prerequisites
 
@@ -65,13 +69,28 @@ The `lumen-core` daemon is pure Rust and runs on any platform. The macOS Swift a
 
 ## Installation
 
-**macOS:**
+**macOS (local install for development):**
 
 ```bash
 sh install.sh
 ```
 
-This builds both binaries in release mode, assembles a `Lumen.app` bundle in `~/Applications`, and runs `mdimport` so Spotlight picks it up immediately. After that, **Cmd+Space -> "Lumen"** launches the app.
+This builds both binaries in release mode for the host architecture, assembles a `Lumen.app` bundle in `~/Applications`, and runs `mdimport` so Spotlight picks it up immediately. After that, **Cmd+Space -> "Lumen"** launches the app.
+
+**macOS (distributable universal DMG):**
+
+```bash
+./scripts/build_dmg.sh
+# → dist/Lumen-0.2.0.dmg
+```
+
+By default this produces a **universal binary** (x86_64 + arm64) that runs on both Intel and Apple Silicon Macs. The script will install the `x86_64-apple-darwin` Rust target on first run (~150 MB, one-time) and `lipo` both binaries together. To speed up local iteration on Apple Silicon, override:
+
+```bash
+ARCHS=arm64 ./scripts/build_dmg.sh   # arm64-only, ~2x faster build
+```
+
+The script logs the architectures of both bundled binaries so a stray single-arch build can't ship to Intel users undetected.
 
 **Linux:**
 
@@ -89,11 +108,26 @@ sudo ./target/release/lumen-core --passive
 
 **Windows:**
 
+Native build on Windows (MSVC toolchain — comes with Visual Studio Build Tools):
+
 ```powershell
 cargo build --release
 Start-Process .\target\release\lumen-core.exe
 # Then open http://127.0.0.1:9091/dashboard
 ```
+
+Cross-compile from a Mac via MinGW:
+
+```bash
+brew install mingw-w64
+rustup target add x86_64-pc-windows-gnu
+CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
+CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+cargo build --release --target x86_64-pc-windows-gnu
+# → target/x86_64-pc-windows-gnu/release/lumen-core.exe (~13 MB)
+```
+
+The daemon resolves `~/.lumen/` via `$USERPROFILE` on Windows (falls back to `$HOME` first for parity with macOS/Linux), so all state files land under `C:\Users\<you>\.lumen\` without extra configuration. Platform-specific privileged features (macOS `pf`-based transparent capture, the `passive` packet-capture feature) are compiled out on Windows; the HTTP forward proxy, JSON API, parser, pricing, and dashboard all work identically to the other platforms.
 
 To run in development without installing (any platform):
 
@@ -101,11 +135,38 @@ To run in development without installing (any platform):
 cargo run   # debug build, live logs in the terminal
 ```
 
+### Crypto backend
+
+`lumen-core` builds with the `ring` TLS crypto backend by default — pure Rust + assembly, no C toolchain at build time, cross-compiles cleanly to all targets (including Windows from macOS).
+
+For FIPS 140-3 environments, post-quantum hybrid KEMs, or strict alignment with AWS's TLS substrate, rebuild with the `aws-lc-rs` backend:
+
+```bash
+cargo build --release --no-default-features --features crypto-aws-lc
+```
+
+The two backends are runtime-equivalent for everything lumen-core does — pick `aws-lc-rs` only if you have a concrete compliance or interop reason. Switching between them does not change the on-wire TLS behavior; it only changes which library performs the underlying cryptographic operations.
+
 ## Setup
 
-### 1. Trust the Lumen CA certificate
+### Choose your capture mode
 
-Lumen performs TLS interception to read encrypted HTTPS traffic. This requires trusting a locally-generated CA certificate once.
+Lumen supports two ways of seeing LLM traffic. Which one you need depends on the client:
+
+| Mode | How it works | Requires CA trust | Best for |
+|---|---|---|---|
+| **Relay** | Client sends plain HTTP to `http://127.0.0.1:9090/anthropic` (etc); the daemon re-originates HTTPS to the real API | No | Claude Code, OpenCode, CLI tools, scripts, anything that respects `ANTHROPIC_BASE_URL` |
+| **Proxy** | Client uses Lumen as an `HTTPS_PROXY`; daemon does TLS MITM with a self-signed CA | Yes -- requires trusting `~/.lumen/ca.pem` once | Claude Desktop, Cursor, any GUI tool that respects system proxy |
+
+**Enterprise / managed laptops:** relay mode side-steps Keychain CA installation entirely, which is the #1 blocker on Jamf/Intune-managed devices. Lead with relay mode if you can.
+
+The **Launch** tab in the menu bar app starts your LLM client in the right mode automatically. Manual configuration is documented below.
+
+### 1. Trust the Lumen CA certificate (proxy mode only)
+
+If you're only using relay mode (Claude Code / OpenCode), **skip this step.**
+
+For proxy-mode clients (Claude Desktop, Cursor), Lumen does TLS interception to read encrypted HTTPS traffic. This requires trusting a locally-generated CA certificate once.
 
 The setup wizard (launched on first run) walks through this automatically. To do it manually:
 
@@ -121,9 +182,16 @@ You can also do this from **Settings -> Certificate -> Trust CA** inside the Lum
 
 ### 2. Configure your LLM client
 
-**Cursor** (recommended -- use the launcher shortcut):
+The **Launch** tab in the menu bar app launches all four supported clients with the right environment pre-configured. The manual incantations are below if you'd rather wire it up yourself.
 
-The easiest way is the **Launch** tab in Lumen, which starts Cursor with the proxy and CA cert pre-configured:
+**Claude Code / OpenCode (relay mode -- no CA trust needed):**
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:9090/anthropic
+claude       # or: opencode
+```
+
+**Cursor (proxy mode):**
 
 ```
 Lumen -> Launch -> Cursor -> Launch
@@ -131,20 +199,20 @@ Lumen -> Launch -> Cursor -> Launch
 
 This sets `HTTPS_PROXY=http://127.0.0.1:9090` and `NODE_EXTRA_CA_CERTS=~/.lumen/ca.pem` automatically.
 
-To configure manually instead:
+To configure Cursor manually instead:
 1. Trust the Lumen CA (step 1 above)
 2. Cursor Settings -> Network -> **HTTP Compatibility -> HTTP/1.1** (required for gRPC capture)
 3. Set system proxy to `127.0.0.1:9090` or `export HTTPS_PROXY=http://127.0.0.1:9090`
 
-**Claude Desktop / other tools:**
+**Claude Desktop (proxy mode):**
 
 ```
-Lumen -> Launch -> [select tool] -> Launch
+Lumen -> Launch -> Claude Desktop -> Launch
 ```
 
-Or manually: `HTTPS_PROXY=http://127.0.0.1:9090 open -a "Claude"`
+Or manually: `HTTPS_PROXY=http://127.0.0.1:9090 open -a "Claude"` (requires CA trust).
 
-**CLI / scripts:**
+**CLI / scripts (proxy mode):**
 
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:9090
@@ -154,7 +222,7 @@ export SSL_CERT_FILE=~/.lumen/ca.pem         # Python / curl
 
 ### 3. Watch the gauges
 
-Click the Lumen menu bar icon. Cost, token rate, and cache savings update in real time as you use your LLM tools.
+Click the Lumen menu bar icon. **Lap Cost** (`$`), **Token Rate**, and **Total Spend** (`$`) update in real time as you use your LLM tools. Right-click the icon for a quick spending summary, lap creation, and shortcut access to launchers and settings.
 
 ## Custom Endpoints
 
@@ -186,25 +254,34 @@ Connect Lumen to a DataGrout server to sync usage events and lap snapshots for t
 lumen/
   lumen-core/             # Rust daemon
     src/
-      main.rs             # entry point -- starts proxy + API server
-      api.rs              # JSON API on :9091
+      main.rs             # entry point + crypto provider install
+      api.rs              # JSON API on :9091 (incl. /dashboard + / -> /dashboard redirect)
       proxy/mod.rs        # HTTP forward proxy on :9090
       parser/mod.rs       # LLM response parser (OpenAI, Anthropic, Cursor, Google)
       pricing/mod.rs      # token pricing database with fuzzy matching
+      pricing/loader.rs   # JSON pricing file loader (local override + remote fetch + cache)
+      pricing.json        # canonical pricing data, schema_version 1
       aggregator/mod.rs   # real-time stats aggregation + lap tracking
+      ca.rs               # self-signed CA generation and persistence
+      tls.rs              # rustls cert cache for MITM
       state.rs            # shared app state
       sync.rs             # DataGrout usage sync
   Lumen/                  # Swift macOS app
     Sources/
-      LumenApp.swift      # NSStatusItem + NSPopover setup
-      PopoverView.swift   # main SwiftUI view
-      GaugeView.swift     # arc gauge component
+      LumenApp.swift      # NSStatusItem + NSPopover + right-click menu + click-outside dismiss
+      PopoverView.swift   # main SwiftUI view, tab navigation, common-mode timer
+      GaugeView.swift     # arc gauge component (supports $ prefix)
       EventFeed.swift     # recent events list
       HostsView.swift     # monitored endpoints panel
-      SettingsView.swift  # DG toggles, proxy config
-      APIClient.swift     # polls lumen-core JSON API
+      SettingsView.swift  # DG toggles, proxy config, live CA trust check
+      LaunchersView.swift # one-click launch for Claude Code, Cursor, Claude Desktop, OpenCode
+      APIClient.swift     # polls lumen-core JSON API (common-mode timer)
       DaemonManager.swift # manages lumen-core process lifecycle
+      StatusIconManager.swift # menu bar icon animation
       WizardView.swift    # first-run setup wizard
+  scripts/
+    build_dmg.sh          # universal (Intel + arm64) DMG build pipeline
+  CHANGELOG.md            # release notes
 ```
 
 ## License

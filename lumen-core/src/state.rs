@@ -1,16 +1,38 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch;
+
+/// Cross-platform user home directory.
+///
+/// Prefers `$HOME` (set on macOS, Linux, BSDs, and most CI environments),
+/// then falls back to `$USERPROFILE` (Windows). Returns `None` only when
+/// neither is set — extremely rare in practice; the caller should handle it
+/// the same way it would handle a system without a home dir.
+///
+/// We deliberately don't pull in the `dirs` crate for this: a six-line helper
+/// covers every environment Lumen has ever run in, and avoids another
+/// transitive dependency on `winapi`.
+pub fn home_dir() -> Option<PathBuf> {
+    for var in ["HOME", "USERPROFILE"] {
+        if let Ok(v) = std::env::var(var) {
+            if !v.is_empty() {
+                return Some(PathBuf::from(v));
+            }
+        }
+    }
+    None
+}
 
 /// Loads the API token from `~/.lumen/api.token`, or generates and persists a new one.
 /// The file is written with 0600 permissions so only the owning user can read it.
 pub fn load_or_create_api_token() -> String {
-    let Some(home) = std::env::var("HOME").ok() else {
+    let Some(home) = home_dir() else {
         return ephemeral_token();
     };
-    let path = std::path::PathBuf::from(home)
+    let path = home
         .join(".lumen")
         .join("api.token");
 
@@ -51,13 +73,8 @@ fn ephemeral_token() -> String {
     hex::encode(bytes)
 }
 
-pub fn dg_config_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(
-        std::path::PathBuf::from(home)
-            .join(".lumen")
-            .join("dg_config.json"),
-    )
+pub fn dg_config_path() -> Option<PathBuf> {
+    Some(home_dir()?.join(".lumen").join("dg_config.json"))
 }
 
 pub fn load_dg_config_from_disk() -> Option<DGConfig> {

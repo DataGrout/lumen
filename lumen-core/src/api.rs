@@ -69,11 +69,30 @@ async fn handle_api_request(
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
 
-    // Authenticate every request except the OAuth browser redirect (can't send custom headers)
-    // and the health probe (used by DaemonManager without a token).
+    // Redirect bare `/` to `/dashboard` so users who hit the API port in a
+    // browser land somewhere useful instead of getting a 401/404.
+    if method == Method::GET && (path == "/" || path.is_empty()) {
+        return Ok(Response::builder()
+            .status(StatusCode::FOUND)
+            .header("Location", "/dashboard")
+            .body(Full::new(Bytes::new()))
+            .unwrap());
+    }
+
+    // Authenticate every request except:
+    //   - /health           : DaemonManager probes without a token
+    //   - /dg/oauth/callback: browser redirect, can't send custom headers
+    //   - /dashboard        : served HTML, token is injected into the page itself
+    //   - /ca/pem           : public certificate, needed by `<a download>` from
+    //                         the dashboard (which is a browser navigation,
+    //                         can't add headers). The PEM contains no secret
+    //                         material — the private key lives elsewhere.
     let auth_exempt = matches!(
         (method.as_str(), path.as_str()),
-        ("GET", "/health") | ("GET", "/dg/oauth/callback") | ("GET", "/dashboard")
+        ("GET", "/health")
+            | ("GET", "/dg/oauth/callback")
+            | ("GET", "/dashboard")
+            | ("GET", "/ca/pem")
     );
     if !auth_exempt {
         let provided = req
@@ -323,8 +342,8 @@ async fn handle_api_request(
             *state.dg_http_client.write() = reqwest::Client::new();
 
             // Delete identity files from ~/.conduit/.
-            if let Some(home) = std::env::var("HOME").ok() {
-                let dir = std::path::PathBuf::from(home).join(".conduit");
+            if let Some(home) = crate::state::home_dir() {
+                let dir = home.join(".conduit");
                 for file in &["identity.pem", "identity_key.pem", "ca.pem", "sub_id.txt"] {
                     let _ = std::fs::remove_file(dir.join(file));
                 }

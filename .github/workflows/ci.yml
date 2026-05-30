@@ -8,8 +8,26 @@ on:
 
 jobs:
   test:
-    name: Test (lumen-core)
-    runs-on: macos-latest
+    name: Test (${{ matrix.os }}, ${{ matrix.crypto }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS exercises both rustls crypto backends (default + FIPS path).
+        # Windows runs the default backend only — that's the deployment target
+        # we actually care about there; aws-lc-rs on Windows works in principle
+        # but the extra ~5 min of build time per PR isn't justified until a
+        # real customer asks for FIPS-on-Windows.
+        include:
+          - os: macos-latest
+            crypto: crypto-ring
+            cargo_args: ""
+          - os: macos-latest
+            crypto: crypto-aws-lc
+            cargo_args: "--no-default-features --features crypto-aws-lc"
+          - os: windows-latest
+            crypto: crypto-ring
+            cargo_args: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -23,9 +41,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             lumen-core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('lumen-core/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          # Cache key includes OS and backend so each variant has its own
+          # bucket (avoids cross-thrashing).
+          key: ${{ matrix.os }}-cargo-${{ matrix.crypto }}-${{ hashFiles('lumen-core/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-${{ matrix.crypto }}-
 
       - name: Run tests
         working-directory: lumen-core
-        run: cargo test --all
+        run: cargo test --all ${{ matrix.cargo_args }}

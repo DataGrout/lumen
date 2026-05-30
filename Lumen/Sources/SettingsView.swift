@@ -9,9 +9,13 @@ struct SettingsView: View {
     @State private var newRouteUpstream = ""
     @State private var systemProxyEnabled = false
     @State private var activeInterface = "Wi-Fi"
-    @State private var caTrusted = false
     @State private var caInstallBusy = false
     @State private var caInstallError: String? = nil
+
+    /// Trust state is owned by APIClient now (background-refreshed every 5s).
+    /// This computed view-side accessor lets existing UI code keep reading
+    /// `caTrusted` without the synchronous subprocess hit at draw time.
+    private var caTrusted: Bool { apiClient.caTrusted }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -294,7 +298,9 @@ struct SettingsView: View {
                 .font(.system(size: 9))
                 .foregroundStyle(.white.opacity(0.3))
         }
-        .onAppear { checkCATrust() }
+        // Trigger an out-of-band refresh when the view appears so the badge
+        // is current without waiting up to 5 s for the next polling tick.
+        .onAppear { apiClient.refreshCATrust() }
     }
 
     private func trustCA() {
@@ -323,7 +329,10 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 caInstallBusy = false
                 if proc.terminationStatus == 0 {
-                    caTrusted = true; caInstallError = nil
+                    // Update the cached state immediately so the badge flips
+                    // green without waiting for the next 5 s refresh tick.
+                    apiClient.caTrusted = true
+                    caInstallError = nil
                 } else if errStr.localizedCaseInsensitiveContains("cancelled") {
                     caInstallError = "Cancelled — enter your login password to trust."
                 } else {
@@ -343,25 +352,7 @@ struct SettingsView: View {
         try? proc.run()
     }
 
-    private func checkCATrust() {
-        DispatchQueue.global(qos: .utility).async {
-            // Check the actual trust settings database, not just cert existence.
-            // find-certificate gives false positives when the cert is in iCloud
-            // keychain with no trust settings.
-            let proc = Process()
-            let pipe = Pipe()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-            proc.arguments = ["dump-trust-settings"]
-            proc.standardOutput = pipe
-            proc.standardError = Pipe()
-            try? proc.run()
-            proc.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) ?? ""
-            let trusted = out.localizedCaseInsensitiveContains("Lumen Local CA")
-            DispatchQueue.main.async { caTrusted = trusted }
-        }
-    }
+    // (Trust check moved to APIClient.refreshCATrust — see init.)
 
     private func revealCA() {
         guard let path = apiClient.caInfo?.path else { return }

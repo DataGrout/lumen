@@ -20,41 +20,41 @@ struct LaunchersView: View {
                     spacing: 10
                 ) {
                     card(
-                        id: "claude-code",
-                        name: "Claude Code",
+                        id: LumenLauncher.claudeCode.rawValue,
+                        name: LumenLauncher.claudeCode.displayName,
                         icon: "apple.terminal",
                         mode: .relay,
-                        available: findBinary("claude") != nil,
+                        available: LumenLauncher.claudeCode.available,
                         action: launchClaudeCode,
                         setupNote: "No CA trust needed — relay injects the base URL via env var.",
                         setupCommand: "ANTHROPIC_BASE_URL=http://127.0.0.1:\(apiClient.proxyConfig.port)/anthropic claude"
                     )
                     card(
-                        id: "cursor",
-                        name: "Cursor",
+                        id: LumenLauncher.cursor.rawValue,
+                        name: LumenLauncher.cursor.displayName,
                         icon: "curlybraces",
                         mode: .proxy,
-                        available: appExists("Cursor"),
+                        available: LumenLauncher.cursor.available,
                         action: launchCursor,
                         setupNote: "① Trust Lumen CA — Settings → Certificate\n② Cursor Settings → Network → HTTP Compatibility → HTTP/1.1\n③ Click Launch",
                         setupCommand: cursorLaunchCommand
                     )
                     card(
-                        id: "claude-desktop",
-                        name: "Claude Desktop",
+                        id: LumenLauncher.claudeDesktop.rawValue,
+                        name: LumenLauncher.claudeDesktop.displayName,
                         icon: "bubble.left.and.bubble.right",
                         mode: .proxy,
-                        available: appExists("Claude"),
+                        available: LumenLauncher.claudeDesktop.available,
                         action: launchClaudeDesktop,
                         setupNote: "Trust Lumen CA in Settings → Certificate, then click Launch.",
                         setupCommand: nil
                     )
                     card(
-                        id: "opencode",
-                        name: "OpenCode",
+                        id: LumenLauncher.opencode.rawValue,
+                        name: LumenLauncher.opencode.displayName,
                         icon: "hammer",
                         mode: .relay,
-                        available: findBinary("opencode") != nil,
+                        available: LumenLauncher.opencode.available,
                         action: launchOpenCode,
                         setupNote: "No CA trust needed — relay injects the base URL via env var.",
                         setupCommand: "ANTHROPIC_BASE_URL=http://127.0.0.1:\(apiClient.proxyConfig.port)/anthropic opencode"
@@ -216,127 +216,43 @@ struct LaunchersView: View {
 
     // MARK: - Launch Actions
 
-    private func launchClaudeCode() {
-        launching = "claude-code"
+    /// All four launchers funnel through LumenLauncher (LaunchService.swift)
+    /// — the spinner / state management lives here, the actual spawn logic
+    /// lives in one place. Keeps this view and the right-click menu in sync.
+    private func launch(_ launcher: LumenLauncher) {
+        launching = launcher.rawValue
         let port = apiClient.proxyConfig.port
-        let baseURL = "http://127.0.0.1:\(port)/anthropic"
+        let caPath = LauncherSupport.resolvedCAPath(from: apiClient.caInfo?.path)
+        // Relay-mode launchers settle in ~1s (Terminal handoff), proxy-mode
+        // ones take ~2s (full .app cold-start). We approximate so the spinner
+        // doesn't linger.
+        let settleDelay: TimeInterval = launcher.mode == .relay ? 1 : 2
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            let script = """
-            tell application "Terminal"
-                activate
-                do script "export ANTHROPIC_BASE_URL=\(baseURL) && echo '✓ Lumen relay active — run: claude'"
-            end tell
-            """
-            runAppleScript(script)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { launching = nil }
+        launcher.launch(proxyPort: port, caPath: caPath) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + settleDelay) {
+                self.launching = nil
+                NotificationCenter.default.post(
+                    name: .lumenShowTab,
+                    object: AppTab.monitor.rawValue
+                )
+            }
         }
     }
 
-    private func launchOpenCode() {
-        launching = "opencode"
-        let port = apiClient.proxyConfig.port
-        let baseURL = "http://127.0.0.1:\(port)/anthropic"
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let script = """
-            tell application "Terminal"
-                activate
-                do script "export ANTHROPIC_BASE_URL=\(baseURL) && echo '✓ Lumen relay active — run: opencode'"
-            end tell
-            """
-            runAppleScript(script)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { launching = nil }
-        }
-    }
-
-    private func launchCursor() {
-        launching = "cursor"
-        let port = apiClient.proxyConfig.port
-        let caPath = resolvedCAPath()
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            launchApp(
-                binary: "/Applications/Cursor.app/Contents/MacOS/Cursor",
-                args: ["--proxy-server=http://127.0.0.1:\(port)"],
-                extraEnv: proxyEnv(port: port, caPath: caPath)
-            )
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { launching = nil }
-        }
-    }
-
-    private func launchClaudeDesktop() {
-        launching = "claude-desktop"
-        let port = apiClient.proxyConfig.port
-        let caPath = resolvedCAPath()
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            launchApp(
-                binary: "/Applications/Claude.app/Contents/MacOS/Claude",
-                args: ["--proxy-server=http://127.0.0.1:\(port)"],
-                extraEnv: proxyEnv(port: port, caPath: caPath)
-            )
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { launching = nil }
-        }
-    }
+    private func launchClaudeCode()    { launch(.claudeCode) }
+    private func launchOpenCode()      { launch(.opencode) }
+    private func launchCursor()        { launch(.cursor) }
+    private func launchClaudeDesktop() { launch(.claudeDesktop) }
 
     // MARK: - Helpers
 
+    /// The copyable manual-launch command shown in Cursor's info expansion.
+    /// Generated locally because it references the current proxy port and
+    /// resolved CA path; the actual launch goes through LumenLauncher.
     private var cursorLaunchCommand: String {
         let port = apiClient.proxyConfig.port
-        let caPath = resolvedCAPath()
+        let caPath = LauncherSupport.resolvedCAPath(from: apiClient.caInfo?.path)
         return "HTTPS_PROXY=http://127.0.0.1:\(port) NODE_EXTRA_CA_CERTS=\(caPath) /Applications/Cursor.app/Contents/MacOS/Cursor --proxy-server=http://127.0.0.1:\(port)"
-    }
-
-    private func appExists(_ name: String) -> Bool {
-        FileManager.default.fileExists(atPath: "/Applications/\(name).app")
-    }
-
-    private func findBinary(_ name: String) -> String? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = [
-            "/usr/local/bin/\(name)",
-            "/opt/homebrew/bin/\(name)",
-            "/usr/bin/\(name)",
-            "\(home)/.local/bin/\(name)",
-            "\(home)/.npm-global/bin/\(name)"
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0) }
-    }
-
-    private func resolvedCAPath() -> String {
-        apiClient.caInfo?.path
-            ?? NSString("~/.lumen/ca.pem").expandingTildeInPath
-    }
-
-    private func proxyEnv(port: Int, caPath: String) -> [String: String] {
-        [
-            "HTTPS_PROXY": "http://127.0.0.1:\(port)",
-            "HTTP_PROXY": "http://127.0.0.1:\(port)",
-            "NODE_EXTRA_CA_CERTS": caPath
-        ]
-    }
-
-    private func launchApp(binary: String, args: [String], extraEnv: [String: String]) {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = args
-        var env = ProcessInfo.processInfo.environment
-        extraEnv.forEach { env[$0] = $1 }
-        proc.environment = env
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        try? proc.run()
-    }
-
-    private func runAppleScript(_ script: String) {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-e", script]
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        try? proc.run()
-        proc.waitUntilExit()
     }
 
     // MARK: - Banners

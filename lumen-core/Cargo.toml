@@ -1,6 +1,6 @@
 [package]
 name = "lumen-core"
-version = "0.1.5"
+version = "0.2.0"
 description = "LLM usage monitor daemon — proxy, parser, pricing, and JSON API"
 authors = ["DataGrout"]
 edition = "2021"
@@ -16,7 +16,7 @@ tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server-auto"] }
 http-body-util = "0.1"
-reqwest = { version = "0.12", features = ["rustls-tls", "json", "stream", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider", "rustls-tls-native-roots-no-provider", "json", "stream", "http2"] }
 tokio-stream = "0.1"
 futures-util = "0.3"
 anyhow = "1"
@@ -25,10 +25,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
-rcgen = "0.13"
-rustls = { version = "0.23", features = ["aws_lc_rs"] }
+rcgen = { version = "0.13", default-features = false, features = ["pem"] }
+# Crypto backend is selected via Cargo features (see [features] below).
+# default-features = false avoids pulling in aws-lc-rs implicitly through
+# rustls' own defaults; feature unification means the backend choice has to
+# be made deliberately at the workspace level.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 rustls-pemfile = "2"
-tokio-rustls = "0.26"
+tokio-rustls = { version = "0.26", default-features = false }
 hex = "0.4"
 flate2 = "1"
 libc = "0.2"
@@ -38,6 +42,25 @@ pcap = { version = "2", features = ["capture-stream"], optional = true }
 etherparse = { version = "0.16", optional = true }
 
 [features]
+# Default crypto backend is `ring`: pure Rust + assembly, no C toolchain at
+# build time, cross-compiles cleanly to Windows / unusual targets. Runtime-
+# equivalent to aws-lc-rs for everything lumen-core does. Switch to
+# crypto-aws-lc if you need FIPS 140-3 certification, post-quantum hybrid
+# KEMs, or AWS-aligned crypto. The two backends are mutually exclusive.
+default = ["crypto-ring"]
+crypto-ring = [
+    "rustls/ring",
+    "tokio-rustls/ring",
+    "rcgen/ring",
+    "reqwest/rustls-tls-no-provider",
+]
+crypto-aws-lc = [
+    "rustls/aws_lc_rs",
+    "tokio-rustls/aws_lc_rs",
+    "rcgen/aws_lc_rs",
+    "reqwest/rustls-tls-no-provider",
+]
+
 passive = ["dep:pcap", "dep:etherparse"]
 
 [dev-dependencies]

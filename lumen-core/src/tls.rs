@@ -78,7 +78,9 @@ mod tests {
     use super::*;
 
     fn init_crypto() {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        use std::sync::Once;
+        static CRYPTO_INIT: Once = Once::new();
+        CRYPTO_INIT.call_once(crate::install_crypto_provider);
     }
 
     #[test]

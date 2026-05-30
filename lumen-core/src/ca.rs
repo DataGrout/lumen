@@ -173,9 +173,8 @@ fn ca_dir() -> Result<PathBuf> {
 }
 
 fn dirs_path() -> Result<PathBuf> {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .context("HOME environment variable not set")
+    crate::state::home_dir()
+        .context("neither HOME nor USERPROFILE environment variable is set")
 }
 
 fn rand_serial() -> SerialNumber {

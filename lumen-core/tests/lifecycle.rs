@@ -1,6 +1,21 @@
 use std::process::{Child, Command};
+use std::sync::Once;
 use std::time::Duration;
 use tempfile::TempDir;
+
+// Integration tests build as separate test binaries, so they can't reach into
+// the bin crate's `install_crypto_provider`. We duplicate the install logic
+// here — small enough to be acceptable, and the cfg gates inherit the parent
+// crate's `crypto-ring` / `crypto-aws-lc` feature selection automatically.
+static CRYPTO_INIT: Once = Once::new();
+fn ensure_crypto_installed() {
+    CRYPTO_INIT.call_once(|| {
+        #[cfg(all(feature = "crypto-ring", not(feature = "crypto-aws-lc")))]
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        #[cfg(feature = "crypto-aws-lc")]
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
 
 fn find_binary() -> String {
     if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
@@ -40,6 +55,10 @@ struct DaemonGuard {
 
 impl DaemonGuard {
     fn new(api_port: u16, proxy_port: u16) -> Self {
+        // Install the crypto provider before any reqwest::Client in this test
+        // process. Every test creates a DaemonGuard, so routing it through here
+        // gives us a single chokepoint without per-test boilerplate.
+        ensure_crypto_installed();
         let temp_home = TempDir::new().expect("failed to create temp home");
         let bin = find_binary();
         let child = Command::new(&bin)

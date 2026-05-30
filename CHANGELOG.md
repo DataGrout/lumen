@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] — 2026-05-29
+
+This release is a cross-platform / enterprise readiness pass on top of the pricing accuracy work in 0.1.5. The headline shifts are universal (Intel + Apple Silicon) DMG builds, a configurable rustls crypto backend so Lumen can be deployed into FIPS environments or cross-compiled to Windows without C-toolchain pain, and a substantial UX pass driven by feedback from real non-technical users.
+
+### Changed
+
+- **Default crypto backend is now `ring`** (was `aws-lc-rs`). Pure Rust + assembly, no C/CMake at build time, cross-compiles cleanly to Windows and other constrained targets. Runtime-equivalent to `aws-lc-rs` for everything `lumen-core` does (TLS MITM, outbound HTTPS via reqwest, self-signed CA generation). The two backends are exposed as mutually-exclusive Cargo features:
+  - `crypto-ring` (default) — laptop / Apple Silicon / Intel / Windows cross-build
+  - `crypto-aws-lc` — FIPS 140-3 environments, post-quantum hybrid KEMs, AWS-aligned deployments
+  - **Breaking change for source builds**: `cargo build` previously linked `aws-lc-rs`; it now links `ring`. Rebuild with `--no-default-features --features crypto-aws-lc` to keep the prior backend.
+- **`rustls`, `tokio-rustls`, `rcgen`, and `reqwest` switched to `default-features = false`** so the crypto backend choice is fully controlled by `lumen-core`'s `[features]` block. Verified via `cargo tree`: each backend's dep tree contains only its own crypto crates with zero contamination from the other.
+- **DMG build defaults to universal (Intel + Apple Silicon)**. `scripts/build_dmg.sh` now invokes `cargo build --target x86_64-apple-darwin` and `--target aarch64-apple-darwin` then `lipo`s them into a fat binary; SwiftPM uses `--arch x86_64 --arch arm64`. Single-arch builds remain available via `ARCHS=arm64 ./scripts/build_dmg.sh` for faster iteration. The script logs `lipo -archs` output for both bundled binaries after assembly so a stray single-arch build can't ship to Intel users undetected.
+
+### Added
+
+- **Web dashboard now has management UI**, not just live stats. Non-Mac users can now configure Lumen end-to-end from a browser:
+  - **Session controls** — "New Lap" and "Clear Session" buttons at the top of the page
+  - **Quick Setup** — copy-to-clipboard relay URLs derived from current routes + proxy port (`http://localhost:9090/openai`, etc.)
+  - **Monitored Hosts** — list / add / delete the HTTPS hosts whose traffic Lumen intercepts
+  - **Relay Routes** — list / add / delete the relay prefix → upstream mappings
+  - **Certificate** — show CA subject + path, one-click download of `ca.pem`, and platform-specific trust-install commands (macOS / Linux / Windows tabs, defaulted by User-Agent detection)
+  - **Launch Your Client** — per-platform copy-paste commands for Claude Code, OpenCode, Cursor, and Claude Desktop. macOS / Linux / Windows tabs auto-selected by User-Agent; commands use the live proxy port + CA path (no stale localhost:9090 references after port changes). Deliberately *not* a one-click launcher: spawning processes from a browser request would expand the post-compromise blast radius (an attacker with token access could launch GUI clients pointed at their own proxy or trust-store overrides) for the modest benefit of saving a paste. The command rows give the same effective outcome — copy, paste into a terminal, run — with zero new attack surface.
+  - **DataGrout** — full connect / disconnect flow. Paste the DG server URL → daemon initiates DCR + PKCE registration → dashboard opens the auth tab → daemon's existing `/dg/oauth/callback` handler completes the exchange → dashboard polls `/dg/dcr/status` and flips to the connected view automatically. Same endpoints the macOS menu app already calls; nothing about the OAuth flow was Mac-specific. A `Disconnect` button calls `DELETE /dg/identity` to clear the local identity files in `~/.conduit/`.
+  - UI lives in a collapsible "Settings & Configuration" panel below the existing stats grid + event feed so the live-stats view stays uncluttered for users who just want to monitor.
+- **`/ca/pem` is now auth-exempt** (was: gated like the rest of the JSON API). The endpoint serves the public CA certificate — the same bytes anyone with the proxy intercepted would see — so the auth gate was theatre. Making it exempt lets a plain `<a download>` from the dashboard work without JS gymnastics. Private key material lives in a separate file (`ca.key.pem`) and remains protected; nothing about its handling changed.
+- **Windows daemon support.** `lumen-core` now runs natively on Windows. The home-directory resolution falls back from `$HOME` to `$USERPROFILE`, so state files land under `C:\Users\<you>\.lumen\` without configuration. Unix-only file-permission calls (`chmod 0600` on the API token + DG identity files) are now `#[cfg(unix)]`-gated; on Windows the files inherit the user-profile directory's ACL, which is already access-controlled by the OS. Verified by cross-compiling to `x86_64-pc-windows-gnu` from a Mac (warning-free) and by a new Windows job in CI that runs the full test suite on every PR. Platform-specific privileged features (`--transparent` pf-based capture, `passive` feature) are compiled out on Windows.
+- **`claude-opus-4-8`** ($5/$25, cache read $0.50, cache write $6.25) added to both compiled-in defaults and `pricing.json`, with the dated alias `claude-opus-4-8-20260528`.
+- **Right-click context menu** on the status bar icon. Surfaces a spending summary (`Lap: $x.xxxx · Total: $x.xx`), New Lap, tab navigation (Monitor / Settings), a Launch submenu (Claude Code, Claude Desktop, Cursor, OpenCode), Open Dashboard in Browser, a read-only TLS trust indicator, and Quit. Addresses training feedback that Quit and lap creation were hard to find.
+- **Persistent popover footer** with always-visible **Open Dashboard** and **Quit** buttons. The footer sits below the scrolling tab content so global actions are one click away from any tab — no need to flip back to Monitor to quit, or hunt through Settings to find the dashboard link. (Quit is removed from the Monitor tab's action row since the footer makes it redundant; Lap and Clear stay because they're context-specific to Monitor.)
+- **`/` → `/dashboard` redirect** on the API port. Users who type `:9091` in a browser now land on the dashboard instead of getting an auth-gated response. Defangs the misdiagnosed-404 reports from initial DMG users.
+- **Notification.Name extensions** (`lumenShowTab`, `lumenNavigateToMonitor`) so the right-click menu, the launchers, and any future surface can drive tab navigation through a single observable channel.
+- **Click-outside dismisses the popover** via a global `NSEvent` monitor in addition to the existing `.transient` behavior. `NSApp.activate(ignoringOtherApps: true)` was removed from the open path — that call was preventing transient dismiss from firing reliably.
+- **`$` prefix on cost gauges**. `ArcGauge` gained a `prefix` parameter; Lap Cost and Total gauges now show `$0.04` instead of `0.04 USD`. Addressed feedback that non-technical users scanning the gauges didn't read "USD" as currency at a glance.
+- **Live CA trust status in Settings**. `checkCATrust()` now re-runs every 8 s, so the badge updates within seconds of any Keychain change rather than only on popover re-open.
+- **Auto-navigate to the Monitor tab** after any Launch action. All four launcher functions now post `lumenNavigateToMonitor` once the spawn completes, so users see the live event feed start ticking without needing to manually switch tabs.
+
+### Fixed
+
+- **First click in the popover required a "wake up" tap.** With `LSUIElement = true` (accessory app) and `.transient` popover behavior (no `NSApp.activate`), AppKit didn't auto-promote the popover to key window on show — so the first click on a tab was consumed by focus-grab instead of hitting the button. Fixed by calling `popover.contentViewController?.view.window?.makeKey()` immediately after `popover.show(...)`. We deliberately don't use `makeKeyAndOrderFront` or `NSApp.activate` here because either would yank system focus from the user's foreground app; `makeKey()` alone gives the popover the key-window status it needs without stealing focus.
+- **Tab buttons needed pixel-precise aim.** Under `.buttonStyle(.plain)`, SwiftUI only treats the rendered text glyph as hit-testable — clicks on the padded background area registered as misses. Added `.contentShape(Rectangle())` to all `.plain`-styled action buttons (tab buttons in the tab bar, Lap, Clear, footer buttons) so the full rendered frame is clickable.
+- **UI not updating after Restart button** — the polling `Timer` was scheduled in `.default` runloop mode, which NSPopover can suspend while open. As a result, between clicking "Restart" and closing/reopening the popover, no polls fired and the "Daemon not running" banner stayed up. Fixed by scheduling the timer via `RunLoop.main.add(timer, forMode: .common)` so it ticks regardless of popover state. Combined with explicit `pollNow()` triggers at +0.5 s and +1.5 s after Restart, the banner now disappears within ~1 s of the daemon coming up.
+- **Polling timer was hammering the OS scheduler** because manual `Timer(timeInterval:)` construction leaves `tolerance` at 0, defeating wakeup coalescing. Set `tolerance = 0.15` on the main poll timer (and `1.0` on the slower CA-trust refresh timer); the user-visible polling cadence is unchanged but battery wakeups are now coalesceable.
+- **CA info never refreshed after first fetch**. `poll()` had `if caInfo == nil { await fetchCAInfo() }`, so cert details were captured once at startup and never re-fetched. Removed the guard — CA info now refreshes on every tick, which matters when a user regenerates the CA or the daemon swaps to a different cert.
+- **CA trust check blocked the main thread when opening the right-click menu**. The status-bar context menu previously called `security dump-trust-settings` synchronously while building the menu, hitching the UI for 100–300 ms on every open. Moved trust checking into `APIClient.refreshCATrust()` which runs on a background queue every ~5 s and updates a published `caTrusted` property; menu and Settings view read the cached value instantly.
+- **DMG build broken on macOS 15+** — `hdiutil attach`'s tab-separated output format changed in Sequoia, causing `awk '{print $NF}'` to return `1` instead of the mount path. Replaced with an explicit `-mountpoint` flag so we no longer parse hdiutil's output at all.
+- **DMG build script silently swallowed Swift compile failures** — the `swift build … | grep -E 'error:|warning:|Build complete'` filter was fragile: multi-arch (XCBuild) builds emit "Build succeeded" instead of "Build complete", so under `pipefail` the grep returned 1 and aborted the script with a misleadingly clean exit, leaving no DMG and no error message. Removed the grep filter (full output streams through) and added an explicit check that fails loudly if the expected built binary isn't found.
+- **Bundle version drift**. `Info.plist`'s `CFBundleShortVersionString` had fallen behind `Cargo.toml`; both are now driven from the same release tag (0.2.0).
+
+### Internal
+
+- **`LaunchService.swift` extracted** — the four LLM-client launch flows (Claude Code, OpenCode, Cursor, Claude Desktop) previously existed in two parallel implementations: one in `LaunchersView.swift` (the Launch tab), one as `@objc` handlers in `LumenApp.swift` (the right-click menu). They have now been unified into a single `LumenLauncher` enum + `LauncherSupport` helpers that both call sites use. Eliminates the drift risk where a fix in one path would silently not propagate to the other.
+- **Tab navigation consolidated to a single notification.** Removed the redundant `lumenNavigateToMonitor` notification; all callers now post `lumenShowTab` with the target `AppTab.rawValue`. Simpler observation surface, no behavioral difference.
+- **`install_crypto_provider()` extracted from `main`** and made `pub` so test setup can call it via `std::sync::Once`. Single chokepoint per test module (`proxy::tests`, `tls::tests`, `tests/lifecycle.rs`) — no per-test boilerplate, no risk of provider-not-installed panics in CI.
+- **`compile_error!` guard** if neither `crypto-ring` nor `crypto-aws-lc` is enabled. Prevents the "compiles, then panics on first TLS handshake" failure mode that an over-zealous `--no-default-features` could otherwise produce.
+
+### Tests / CI
+
+- All **91 unit tests + 13 integration tests pass under both `crypto-ring` (default) and `crypto-aws-lc`** feature configurations on macOS, and under `crypto-ring` on Windows.
+- **CI now runs a matrix** across `(macos-latest × crypto-ring, macos-latest × crypto-aws-lc, windows-latest × crypto-ring)` (`.github/workflows/ci.yml`). Cache keys are namespaced per `(os, backend)` to avoid cross-thrashing. Windows skips the `crypto-aws-lc` row to keep PR build time reasonable — it works in principle but the C-toolchain cost isn't justified until a real customer asks for FIPS-on-Windows.
+- `cargo tree` verified to contain `ring` only (default) or `aws-lc-rs` only (`crypto-aws-lc`) — no cross-contamination between backends.
+- **Universal DMG pipeline verified end-to-end**: built `dist/Lumen-0.2.0.dmg` (9.8 MB), confirmed both bundled binaries report `x86_64 arm64` via `lipo -archs`, launched the daemon directly from the mounted DMG, and confirmed `:9091/dashboard` returns HTTP 200 and `:9091/` 302-redirects to `/dashboard`.
+
+### Known limitations (not addressed)
+
+- **DMG is still ad-hoc signed**, not notarized. Managed-laptop users may have first-launch blocked by Gatekeeper policy. Pending org Apple Developer ID.
+- **No Windows installer / `.msi`**. Windows users currently invoke the daemon binary directly from a terminal. A proper installer with a Start Menu entry and service registration is a future addition.
+
+---
+
 ## [0.1.5] — 2026-05-26
 
 ### Fixed
