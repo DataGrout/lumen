@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] — 2026-06-10
+
+### Added
+
+- **DataGrout sync sessions now stay alive automatically.** Previously the secure session credential expired after ~30 days and sync would quietly stop with no indication. Now the daemon:
+  - **renews the session before it expires** while running normally, so a continuously-running daemon never lapses;
+  - **recovers on its own if the session has already expired** (e.g. the app was closed for a while) — restoring the secure connection with no sign-in required;
+  - **keeps syncing in a reduced mode** if automatic recovery isn't possible, and prompts you to reconnect rather than failing silently.
+- **DataGrout session state is now visible in the app** (it previously showed "Connected" even after the session had lapsed):
+  - **Settings → DataGrout** is three-state — *Connected*, *Session expired* (with a one-tap **Reconnect**), or *Not connected* — and shows when the session expires.
+  - **Monitor tab banner** appears when the session has expired, with a Reconnect shortcut.
+  - **Launch screen** no longer implies all-clear when the session has lapsed — it tells you to reconnect.
+- **Version is now visible**, so it's easy to answer "what version are you on?":
+  - Right-click the menu bar icon → a header line shows the app version (and the daemon version too, if they differ).
+  - Settings → About lists both **App** and **Core** (daemon) versions, with a note if they don't match.
+  - The web dashboard footer shows the running version.
+
+### Fixed
+
+- **No more repeated sync-error log spam.** A persistent sync failure now logs once and then only occasionally, instead of every 30 seconds.
+
+### Internal
+
+- Added certificate-expiry awareness and automatic renewal/recovery to the DataGrout sync client. New `x509-parser` dependency to read certificate validity windows (`rcgen` only generates certs, it can't parse them).
+
 ## [0.2.0] — 2026-05-29
 
 This release is a cross-platform / enterprise readiness pass on top of the pricing accuracy work in 0.1.5. The headline shifts are universal (Intel + Apple Silicon) DMG builds, a configurable rustls crypto backend so Lumen can be deployed into FIPS environments or cross-compiled to Windows without C-toolchain pain, and a substantial UX pass driven by feedback from real non-technical users.

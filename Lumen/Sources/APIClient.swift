@@ -113,6 +113,19 @@ struct HealthResponse: Codable {
     }
 }
 
+/// Version helpers. The app-bundle version is only available when running from
+/// a real `.app` (the DMG embeds Info.plist); a dev `swift build` has no bundle
+/// and returns nil. The daemon version (APIClient.coreVersion, from /health)
+/// comes from Cargo and is always present once connected — so we treat *core*
+/// as the authoritative "Lumen version" for display and use the bundle version
+/// only to detect an app/daemon mismatch.
+enum LumenVersion {
+    /// nil outside a proper .app bundle (e.g. dev `swift build` / run.sh).
+    static var appBundle: String? {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    }
+}
+
 struct TrafficEntry: Codable, Identifiable {
     var id: String
     var timestamp: String
@@ -208,12 +221,28 @@ struct DGStatus: Codable {
     var connected: Bool
     var subId: String?
     var serverUrl: String?
+    /// Cert expiry as Unix seconds (nil if no cert / unparseable).
+    var certExpiresAt: Int?
+    /// "mtls" | "bearer-fallback" | "none"
+    var authMode: String?
+    /// True when the cert expired and we've fallen back to sync-token auth.
+    /// Sync still works, but mTLS needs a reconnect to restore.
+    var needsReconnect: Bool?
 
     enum CodingKeys: String, CodingKey {
         case connected
         case subId = "sub_id"
         case serverUrl = "server_url"
+        case certExpiresAt = "cert_expires_at"
+        case authMode = "auth_mode"
+        case needsReconnect = "needs_reconnect"
     }
+
+    /// True when an identity exists but its cert has lapsed (degraded mode).
+    var isExpiredSession: Bool { needsReconnect == true }
+
+    /// True only when fully healthy on mTLS.
+    var isHealthy: Bool { connected && needsReconnect != true }
 }
 
 @Observable
@@ -231,6 +260,9 @@ final class APIClient {
     var routes: [RelayRoute] = []
     var caInfo: CAInfo?
     var dgStatus: DGStatus?
+    /// Version reported by the running lumen-core daemon (from /health). May
+    /// differ from the Swift app version if an external/older daemon is attached.
+    var coreVersion: String?
     /// Whether the Lumen CA is trusted in the user's login keychain. Refreshed
     /// every ~5 s on a background queue (see refreshCATrust), so the right-click
     /// menu and Settings view can read it instantly without blocking on a
@@ -325,8 +357,20 @@ final class APIClient {
         await fetchCAInfo()
         await fetchDGStatus()
         await fetchDGConfig()
+        if coreVersion == nil {
+            await fetchHealth()
+        }
         if trafficTabActive {
             await fetchTrafficIfChanged()
+        }
+    }
+
+    /// Fetch the daemon's reported version (and re-fetch on reconnect, since an
+    /// externally-restarted daemon could be a different build).
+    func fetchHealth() async {
+        guard let data = await get("/health") else { return }
+        if let decoded = try? JSONDecoder().decode(HealthResponse.self, from: data) {
+            await MainActor.run { coreVersion = decoded.version }
         }
     }
 
@@ -339,7 +383,9 @@ final class APIClient {
 
     func fetchStats() async {
         guard let data = await get("/stats") else {
-            await MainActor.run { connected = false }
+            // Drop the cached daemon version on disconnect so it's re-fetched
+            // on reconnect (the daemon could have restarted to a new build).
+            await MainActor.run { connected = false; coreVersion = nil }
             return
         }
         if let decoded = try? JSONDecoder().decode(AggregateStats.self, from: data) {

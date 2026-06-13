@@ -299,6 +299,9 @@ struct PopoverView: View {
                 if !apiClient.connected || !apiClient.proxyConfig.running {
                     captureBanner
                 }
+                if apiClient.dgStatus?.isExpiredSession == true {
+                    dgExpiredBanner
+                }
                 gaugeRow
                 tokenBar
                 summaryRow
@@ -318,6 +321,45 @@ struct PopoverView: View {
     }
 
     @ViewBuilder
+    // Shown on Monitor when the DG identity cert has expired and sync has
+    // fallen back to the sync-token bearer. "Reconnect" jumps to Settings →
+    // DataGrout, where the actual OAuth reconnect lives.
+    private var dgExpiredBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.lock.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("DataGrout session expired")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                Text("Syncing on a fallback token — reconnect to restore secure mTLS")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button(action: { activeTab = .settings }) {
+                Text("Reconnect")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.orange.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.orange.opacity(0.35), lineWidth: 1))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.2), lineWidth: 1))
+    }
+
     private var captureBanner: some View {
         let (icon, message, detail, color): (String, String, String, Color) = {
             if !apiClient.connected {
@@ -333,7 +375,7 @@ struct PopoverView: View {
             }
         }()
 
-        HStack(spacing: 10) {
+        return HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 14))
                 .foregroundStyle(color)

@@ -218,6 +218,39 @@ pub struct DcrFlow {
     pub device_name: String,
 }
 
+/// How DG sync is currently authenticating, for surfacing in `/dg/status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DgAuthMode {
+    /// No identity configured (user hasn't connected DG).
+    #[default]
+    None,
+    /// Valid mTLS cert in use.
+    Mtls,
+    /// Cert expired — running on the long-lived sync-token bearer instead.
+    /// Sync still works; reconnect (or a future rotation) restores mTLS.
+    BearerFallback,
+}
+
+impl DgAuthMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DgAuthMode::None => "none",
+            DgAuthMode::Mtls => "mtls",
+            DgAuthMode::BearerFallback => "bearer-fallback",
+        }
+    }
+}
+
+/// Live view of the DG identity cert's health, updated by the sync loop and
+/// read by `/dg/status` so the UI can show "expires in N days" / "expired —
+/// reconnect" instead of cryptic gateway errors.
+#[derive(Debug, Clone, Default)]
+pub struct DgCertStatus {
+    /// Cert `notAfter` as Unix seconds, if a cert is loaded and parseable.
+    pub expires_at: Option<i64>,
+    pub mode: DgAuthMode,
+}
+
 pub struct AppState {
     pub api_token: String,
     pub aggregator: Arc<Aggregator>,
@@ -239,6 +272,8 @@ pub struct AppState {
     pub dg_sync_token: Arc<RwLock<Option<String>>>,
     /// Conduit sub_id of the registered device (from dg_identity or saved config).
     pub dg_lumen_sub_id: Arc<RwLock<Option<String>>>,
+    /// Cert expiry + current auth mode, maintained by the sync loop.
+    pub dg_cert_status: Arc<RwLock<DgCertStatus>>,
     pub traffic_log: Arc<TrafficLog>,
     pub ca: Arc<LumenCA>,
     pub cert_cache: Arc<CertCache>,
@@ -258,11 +293,37 @@ impl AppState {
         let cert_cache = Arc::new(CertCache::new(ca.clone()));
 
         // Try to load a pre-existing Conduit identity from ~/.conduit/.
+        // If the cert is already expired, don't present it — the gateway's
+        // nginx rejects an expired client cert at the TLS layer before our
+        // bearer token is even seen. Build a bearer-only client instead so
+        // sync survives; the sync loop will keep this in step thereafter.
         let identity = ConduitIdentity::try_load();
-        let http_client = identity
+        let cert_expires_at = identity
             .as_ref()
-            .and_then(|id| id.build_client().ok())
-            .unwrap_or_else(|| reqwest::Client::new());
+            .and_then(|id| id.cert_not_after())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+
+        let (http_client, auth_mode) = match identity.as_ref() {
+            None => (reqwest::Client::new(), DgAuthMode::None),
+            Some(id) if id.is_expired() => {
+                tracing::warn!(
+                    "conduit: stored mTLS cert is expired — using sync-token bearer auth. \
+                     Reconnect DataGrout to restore mTLS."
+                );
+                let c = crate::conduit::bearer_only_client()
+                    .unwrap_or_else(|_| reqwest::Client::new());
+                (c, DgAuthMode::BearerFallback)
+            }
+            Some(id) => {
+                let c = id.build_client().unwrap_or_else(|_| reqwest::Client::new());
+                (c, DgAuthMode::Mtls)
+            }
+        };
+        let dg_cert_status = DgCertStatus {
+            expires_at: cert_expires_at,
+            mode: auth_mode,
+        };
 
         let dg_config = load_dg_config_from_disk().unwrap_or_default();
         // Normalize on load — old configs may have stored /mcp-suffixed or non-canonical URLs.
@@ -287,6 +348,7 @@ impl AppState {
             dg_http_client: Arc::new(RwLock::new(http_client)),
             dg_sync_token: Arc::new(RwLock::new(dg_sync_token)),
             dg_lumen_sub_id: Arc::new(RwLock::new(dg_lumen_sub_id)),
+            dg_cert_status: Arc::new(RwLock::new(dg_cert_status)),
             traffic_log: Arc::new(TrafficLog::new()),
             ca,
             cert_cache,

@@ -418,6 +418,25 @@ struct WizardView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
+            // If the DataGrout session cert lapsed while the app was away,
+            // say so here rather than letting the cheery "Ready" splash imply
+            // everything's fine. Sync still works on the fallback token; this
+            // points the user to the reconnect.
+            if apiClient.dgStatus?.isExpiredSession == true {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.lock.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                    Text("It's been a while — your DataGrout session expired. Sync is running on a fallback token; reconnect in Settings → DataGrout to restore secure mTLS.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange.opacity(0.7))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             launchShortcuts
 
             HStack(spacing: 6) {
@@ -429,6 +448,46 @@ struct WizardView: View {
                     .foregroundStyle(.white.opacity(0.3))
             }
             .padding(.horizontal, 4)
+
+            // Quick routes off the launcher-only splash: full settings (native)
+            // or the web dashboard. Addresses the splash feeling like a dead end.
+            HStack(spacing: 8) {
+                Button(action: {
+                    NotificationCenter.default.post(name: .lumenOpenSettings, object: nil)
+                }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "gearshape").font(.system(size: 10))
+                        Text("Open Settings").font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button(action: {
+                    if let url = URL(string: "http://127.0.0.1:9091/dashboard") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "safari").font(.system(size: 10))
+                        Text("Open Dashboard").font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.85))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color(red: 0.4, green: 0.7, blue: 0.95).opacity(0.30), lineWidth: 1))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
 
             HStack {
                 VStack(alignment: .leading, spacing: 1) {

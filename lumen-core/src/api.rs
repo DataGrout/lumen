@@ -539,7 +539,8 @@ async fn handle_api_request(
 
         (Method::GET, "/dashboard") => {
             let html = include_str!("dashboard.html")
-                .replace("__LUMEN_TOKEN__", &state.api_token);
+                .replace("__LUMEN_TOKEN__", &state.api_token)
+                .replace("__LUMEN_VERSION__", env!("CARGO_PKG_VERSION"));
             Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/html; charset=utf-8")
@@ -555,12 +556,18 @@ async fn handle_api_request(
                 .read()
                 .as_ref()
                 .and_then(|id| id.sub_id.clone());
+            let cert = state.dg_cert_status.read().clone();
             json_response(
                 StatusCode::OK,
                 &serde_json::json!({
                     "connected": has_identity,
                     "sub_id": sub_id,
                     "server_url": state.dg_server_url.read().clone(),
+                    // Cert health for the UI: expiry, current auth mode, and a
+                    // flag the UI can show as "reconnect to restore mTLS".
+                    "cert_expires_at": cert.expires_at,
+                    "auth_mode": cert.mode.as_str(),
+                    "needs_reconnect": cert.mode == crate::state::DgAuthMode::BearerFallback,
                 }),
             )
         }

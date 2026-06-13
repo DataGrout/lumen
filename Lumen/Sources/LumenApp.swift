@@ -64,6 +64,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             rootView: PopoverView(apiClient: apiClient, daemonManager: daemonManager)
         )
 
+        // Let the setup wizard (a separate window) route the user into the
+        // popover's Settings tab: close the wizard, open the popover, switch tab.
+        NotificationCenter.default.addObserver(
+            forName: .lumenOpenSettings, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, let button = self.statusItem.button else { return }
+            self.wizardWindow?.close()
+            if !self.popover.isShown { self.openPopover(relativeTo: button) }
+            NotificationCenter.default.post(name: .lumenShowTab, object: AppTab.settings.rawValue)
+        }
+
         if !UserDefaults.standard.bool(forKey: "lumen.suppressLauncher") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 let setupComplete = UserDefaults.standard.bool(forKey: "lumen.setupComplete")
@@ -196,6 +207,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showContextMenu() {
         let menu = NSMenu()
 
+        // Version header (disabled). Lead with the daemon version (always
+        // present once connected, even in dev). Append the app-bundle version
+        // only when it's known AND differs — a mismatch usually means an older
+        // daemon is attached.
+        let core = apiClient.coreVersion
+        let app = LumenVersion.appBundle
+        let primary = core ?? app ?? "unknown"
+        let suffix: String = {
+            if let core, let app, core != app { return "  (app \(app))" }
+            return ""
+        }()
+        let versionItem = NSMenuItem(title: "Lumen \(primary)\(suffix)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
+        menu.addItem(.separator())
+
         // Spending summary
         let lapCost = apiClient.stats.sessionCost
         let totalCost = apiClient.stats.totalCost
@@ -326,4 +353,7 @@ extension Notification.Name {
     /// the `AppTab.rawValue` to activate (e.g. "monitor", "settings"). Posted
     /// by the status-bar right-click menu and by launcher actions.
     static let lumenShowTab = Notification.Name("lumen.showTab")
+    /// Open the popover and jump straight to Settings. Posted by the setup
+    /// wizard so a user can reach Settings without hunting for the menu icon.
+    static let lumenOpenSettings = Notification.Name("lumen.openSettings")
 }

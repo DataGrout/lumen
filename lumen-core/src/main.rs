@@ -167,6 +167,8 @@ async fn main() {
             sync_state.dg_bearer_token.clone(),
             sync_state.dg_sync_token.clone(),
             sync_state.dg_lumen_sub_id.clone(),
+            sync_state.dg_identity.clone(),
+            sync_state.dg_cert_status.clone(),
         );
         syncer.start(sync_shutdown_rx).await;
     });

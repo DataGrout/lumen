@@ -15,7 +15,7 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
 // ─── Identity ────────────────────────────────────────────────────────────────
@@ -123,6 +123,55 @@ impl ConduitIdentity {
             .context("failed to build mTLS reqwest client")
     }
 
+    /// Parse the cert's `notAfter` expiry. Returns `None` if the cert can't be
+    /// parsed (we then treat expiry as unknown — never auto-expire on a parse
+    /// failure, to avoid breaking a working cert over a parser quirk).
+    pub fn cert_not_after(&self) -> Option<SystemTime> {
+        use x509_parser::prelude::*;
+        let (_, pem) = parse_x509_pem(&self.cert_pem).ok()?;
+        let (_, cert) = parse_x509_certificate(&pem.contents).ok()?;
+        let ts = cert.validity().not_after.timestamp();
+        if ts < 0 {
+            return None;
+        }
+        Some(SystemTime::UNIX_EPOCH + Duration::from_secs(ts as u64))
+    }
+
+    /// CN from the cert subject — reused as the `name` on rotation so the
+    /// rotated cert keeps a stable identity label.
+    pub fn subject_cn(&self) -> Option<String> {
+        use x509_parser::prelude::*;
+        let (_, pem) = parse_x509_pem(&self.cert_pem).ok()?;
+        let (_, cert) = parse_x509_certificate(&pem.contents).ok()?;
+        // Convert to an owned String in a statement (note the trailing `;`) so
+        // the borrowing iterator temporaries are dropped before `pem`/`cert`,
+        // rather than living into the tail expression past their backing data.
+        let cn = cert
+            .subject()
+            .iter_common_name()
+            .next()
+            .and_then(|cn| cn.as_str().ok())
+            .map(|s| s.to_string());
+        cn
+    }
+
+    /// True if the cert is already past its `notAfter`. Unknown expiry → false.
+    pub fn is_expired(&self) -> bool {
+        match self.cert_not_after() {
+            Some(t) => t <= SystemTime::now(),
+            None => false,
+        }
+    }
+
+    /// True if the cert expires within `threshold` (i.e. time to proactively
+    /// rotate while it's still valid). Unknown expiry → false.
+    pub fn needs_rotation(&self, threshold: Duration) -> bool {
+        match self.cert_not_after() {
+            Some(t) => t <= SystemTime::now() + threshold,
+            None => false,
+        }
+    }
+
     /// Persist this identity to `~/.conduit/`.  Overwrites any existing files.
     fn save_to_dir(dir: &PathBuf, sub_id: &str, cert: &str, key: &str, ca: &str) -> Result<()> {
         fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
@@ -139,6 +188,170 @@ impl ConduitIdentity {
         );
         Ok(())
     }
+}
+
+/// Build a reqwest client with **no** client certificate — used as the
+/// degraded fallback when the mTLS cert is expired. The DG gateway accepts a
+/// `Bearer lm_<sub>.<sync_token>` on the same endpoints (verified: a no-cert
+/// bearer request to /api/v1/lumen/stats returns 200), so sync keeps working.
+/// Server cert is still verified against the OS trust store (the gateway has a
+/// public cert), so this is not an insecure-TLS path.
+pub fn bearer_only_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .use_rustls_tls()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("failed to build bearer-only reqwest client")
+}
+
+/// Rotate the current identity over mTLS: generate a new keypair, present the
+/// *current* (still-valid) cert to the DG `/rotate` endpoint, and receive a
+/// fresh DG-signed cert. Must be called while the current cert is still valid —
+/// `/rotate` requires a live cert fingerprint and rejects bearer-only auth, so
+/// an already-expired cert cannot rotate itself (that path needs a reconnect).
+///
+/// `gateway_root` is the API origin (e.g. `https://gateway.datagrout.ai`),
+/// not the per-server MCP URL.
+pub async fn rotate_identity(
+    current: &ConduitIdentity,
+    gateway_root: &str,
+) -> Result<ConduitIdentity> {
+    let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
+        .context("rotation keypair generation failed")?;
+    let pub_key_der = key_pair.public_key_der();
+    let pub_key_pem = format!(
+        "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+        base64_encode_chunks(&pub_key_der)
+    );
+    let key_pem_str = key_pair.serialize_pem();
+
+    // Preserve the existing cert's CN as the rotated cert's name.
+    let name = current
+        .subject_cn()
+        .unwrap_or_else(|| "lumen-device".to_string());
+
+    // mTLS-authenticated client built from the CURRENT cert.
+    let client = current
+        .build_client()
+        .context("failed to build mTLS client for rotation (cert may be expired)")?;
+
+    let endpoint = format!(
+        "{}/api/v1/substrate/identity/rotate",
+        gateway_root.trim_end_matches('/')
+    );
+
+    let resp = client
+        .post(&endpoint)
+        .json(&serde_json::json!({
+            "public_key_pem": pub_key_pem,
+            "name": name,
+        }))
+        .send()
+        .await
+        .context("rotation request failed")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("rotation returned {}: {}", status, body);
+    }
+
+    let reg: RegisterResponse = resp
+        .json()
+        .await
+        .context("failed to parse rotation response")?;
+
+    let dir = home_dir()
+        .map(|h| h.join(".conduit"))
+        .unwrap_or_else(|| PathBuf::from(".conduit"));
+    ConduitIdentity::save_to_dir(&dir, &reg.id, &reg.cert_pem, &key_pem_str, &reg.ca_cert_pem)?;
+
+    info!("conduit: rotated identity sub_id={} (fresh cert issued)", reg.id);
+
+    Ok(ConduitIdentity {
+        cert_pem: reg.cert_pem.into_bytes(),
+        key_pem: key_pem_str.into_bytes(),
+        ca_pem: Some(reg.ca_cert_pem.into_bytes()),
+        sub_id: Some(reg.id),
+        // /rotate does not reissue a sync_token (that's lumen-bootstrap-only);
+        // the existing one stays valid since the sub_id is unchanged.
+        sync_token: current.sync_token.clone(),
+    })
+}
+
+/// Reissue the identity over the sync-token bearer (no client cert), for the
+/// case where the current cert has already EXPIRED and so can't be presented
+/// over mTLS. Hits the same `/rotate` endpoint but authenticates with the
+/// stored sync-token bearer instead of the (dead) cert.
+///
+/// Depends on server-side support for sync-token-authenticated reissue; if the
+/// server doesn't support it this call errors and the caller degrades to
+/// bearer-only sync.
+pub async fn reissue_identity_via_sync_token(
+    current: &ConduitIdentity,
+    gateway_root: &str,
+    sub_id: &str,
+    sync_token: &str,
+) -> Result<ConduitIdentity> {
+    let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
+        .context("reissue keypair generation failed")?;
+    let pub_key_der = key_pair.public_key_der();
+    let pub_key_pem = format!(
+        "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+        base64_encode_chunks(&pub_key_der)
+    );
+    let key_pem_str = key_pair.serialize_pem();
+    let name = current
+        .subject_cn()
+        .unwrap_or_else(|| "lumen-device".to_string());
+
+    // No client cert — nginx lets this through (optional verify) and the
+    // gateway authenticates the bearer.
+    let client = bearer_only_client()?;
+    let endpoint = format!(
+        "{}/api/v1/substrate/identity/rotate",
+        gateway_root.trim_end_matches('/')
+    );
+
+    let resp = client
+        .post(&endpoint)
+        .bearer_auth(format!("lm_{}.{}", sub_id, sync_token))
+        .json(&serde_json::json!({
+            "public_key_pem": pub_key_pem,
+            "name": name,
+        }))
+        .send()
+        .await
+        .context("reissue request failed")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("reissue returned {}: {}", status, body);
+    }
+
+    let reg: RegisterResponse = resp
+        .json()
+        .await
+        .context("failed to parse reissue response")?;
+
+    let dir = home_dir()
+        .map(|h| h.join(".conduit"))
+        .unwrap_or_else(|| PathBuf::from(".conduit"));
+    ConduitIdentity::save_to_dir(&dir, &reg.id, &reg.cert_pem, &key_pem_str, &reg.ca_cert_pem)?;
+
+    info!(
+        "conduit: reissued identity via sync token sub_id={} (mTLS restored)",
+        reg.id
+    );
+
+    Ok(ConduitIdentity {
+        cert_pem: reg.cert_pem.into_bytes(),
+        key_pem: key_pem_str.into_bytes(),
+        ca_pem: Some(reg.ca_cert_pem.into_bytes()),
+        sub_id: Some(reg.id),
+        sync_token: current.sync_token.clone(),
+    })
 }
 
 // ─── Registration ─────────────────────────────────────────────────────────────

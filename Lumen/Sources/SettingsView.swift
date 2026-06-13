@@ -518,8 +518,44 @@ struct SettingsView: View {
     @State private var dgConnectError: String? = nil
     @State private var dgPollTimer: Timer? = nil
 
-    private var dgConnected: Bool {
-        apiClient.dgStatus?.connected == true
+    /// Three distinct states: healthy mTLS, expired (degraded to sync-token —
+    /// reconnect to restore mTLS), or not connected at all.
+    private enum DGState { case healthy, expired, disconnected }
+    private var dgState: DGState {
+        guard let s = apiClient.dgStatus, s.connected else { return .disconnected }
+        return s.isExpiredSession ? .expired : .healthy
+    }
+    private var dgConnected: Bool { dgState != .disconnected }
+
+    private var dgStatusColor: Color {
+        switch dgState {
+        case .healthy: return .green
+        case .expired: return .orange
+        case .disconnected: return .white.opacity(0.4)
+        }
+    }
+    private var dgStatusLabel: String {
+        switch dgState {
+        case .healthy: return "Connected"
+        case .expired: return "Session expired"
+        case .disconnected: return "Not connected"
+        }
+    }
+
+    private func dgFormatExpiry(_ unix: Int) -> String {
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .short
+        return fmt.string(from: Date(timeIntervalSince1970: TimeInterval(unix)))
+    }
+
+    /// Reconnect re-runs the same browser OAuth flow, pre-seeded with the
+    /// already-known server URL so the user doesn't have to paste it again.
+    private func reconnectDG() {
+        dgServerURL = apiClient.dgStatus?.serverUrl
+            ?? apiClient.dgConfig.serverUrl
+            ?? dgServerURL
+        startDCRConnect()
     }
 
     private var dgSection: some View {
@@ -531,11 +567,11 @@ struct SettingsView: View {
                 Spacer()
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(dgConnected ? Color.green : Color.white.opacity(0.2))
+                        .fill(dgStatusColor)
                         .frame(width: 6, height: 6)
-                    Text(dgConnected ? "Connected" : "Not connected")
+                    Text(dgStatusLabel)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(dgConnected ? .green : .white.opacity(0.4))
+                        .foregroundStyle(dgStatusColor)
                 }
             }
             .padding(.horizontal, 10)
@@ -543,12 +579,44 @@ struct SettingsView: View {
             .background(Color.white.opacity(0.03))
             .clipShape(RoundedRectangle(cornerRadius: 5))
 
-            if dgConnected {
+            // Expired: explain the degraded state and offer a one-tap reconnect.
+            if dgState == .expired {
+                Text("Your DataGrout session certificate expired. Sync is still running on a fallback token — reconnect to restore secure mTLS.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 2)
+
+                Button(action: reconnectDG) {
+                    HStack(spacing: 6) {
+                        if dgConnecting {
+                            ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                        } else {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                        }
+                        Text(dgConnecting ? (dgAuthURL == nil ? "Registering…" : "Waiting for browser…") : "Reconnect")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.orange)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .disabled(dgConnecting)
+            }
+
+            if dgState == .healthy || dgState == .expired {
                 if let subId = apiClient.dgStatus?.subId {
                     settingRow("Device ID", value: subId)
                 }
                 if let url = apiClient.dgStatus?.serverUrl {
                     settingRow("Server", value: url)
+                }
+                if let exp = apiClient.dgStatus?.certExpiresAt {
+                    settingRow("Cert \(dgState == .expired ? "expired" : "expires")",
+                               value: dgFormatExpiry(exp))
                 }
                 Button(action: {
                     Task { await apiClient.disconnectDG() }
@@ -564,7 +632,9 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-            } else {
+            }
+
+            if dgState == .disconnected {
                 VStack(spacing: 6) {
                     TextField("https://…datagrout.ai/servers/UUID/mcp", text: $dgServerURL)
                         .textFieldStyle(.plain)
@@ -737,13 +807,22 @@ struct SettingsView: View {
 
     @AppStorage("lumen.suppressLauncher") private var suppressLauncher = false
 
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-    }
-
     private var aboutSection: some View {
         settingsGroup("About") {
-            settingRow("Version", value: appVersion)
+            // Lead with the daemon version (authoritative, always available).
+            // Surface the app-bundle version only as a mismatch row, since in
+            // dev builds there's no bundle version at all.
+            settingRow("Version", value: apiClient.coreVersion ?? LumenVersion.appBundle ?? "—")
+            if let core = apiClient.coreVersion,
+               let app = LumenVersion.appBundle,
+               core != app {
+                settingRow("App bundle", value: app)
+                Text("App and daemon versions differ — quit and relaunch Lumen to sync.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.orange.opacity(0.7))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 2)
+            }
             settingRow("License", value: "MIT")
             settingRow("Daemon", value: daemonManager.isRunning ? "Running" : "Stopped",
                       highlight: daemonManager.isRunning)
