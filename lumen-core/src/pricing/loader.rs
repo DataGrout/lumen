@@ -24,8 +24,14 @@ const FETCH_TIMEOUT_SECS: u64 = 10;
 // ---------------------------------------------------------------------------
 
 fn lumen_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".lumen")
+    // Use the shared cross-platform resolver (HOME, then USERPROFILE on Windows)
+    // — the same one ca.rs / conduit.rs use, so pricing lands in the same
+    // `~/.lumen` dir as everything else. Falling back to the raw `HOME` var here
+    // produced a Unix `/tmp/.lumen/...` path on Windows (no HOME) that the OS
+    // rejected. `std::env::temp_dir()` is the correct last-resort per platform.
+    crate::state::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".lumen")
 }
 
 pub fn user_override_path() -> PathBuf {
@@ -65,11 +71,17 @@ pub fn load_pricing() -> PricingDatabase {
     let override_path = user_override_path();
     if override_path.exists() {
         if let Some(db) = try_load(&override_path) {
-            tracing::info!("pricing: loaded from user override {}", override_path.display());
+            tracing::info!(
+                "pricing: loaded from user override {}",
+                override_path.display()
+            );
             spawn_background_refresh(); // still refresh cache for next boot
             return db;
         }
-        tracing::warn!("pricing: user override {} unreadable, continuing", override_path.display());
+        tracing::warn!(
+            "pricing: user override {} unreadable, continuing",
+            override_path.display()
+        );
     }
 
     // 2. Last remote fetch cache
@@ -80,7 +92,10 @@ pub fn load_pricing() -> PricingDatabase {
             spawn_background_refresh();
             return db;
         }
-        tracing::warn!("pricing: remote cache {} unreadable, continuing", cache.display());
+        tracing::warn!(
+            "pricing: remote cache {} unreadable, continuing",
+            cache.display()
+        );
     }
 
     // 3. Compiled-in defaults
@@ -125,8 +140,8 @@ async fn fetch_remote() -> anyhow::Result<String> {
     let text = resp.text().await?;
 
     // Validate before caching — reject corrupt or future-schema files.
-    let file: PricingFile = serde_json::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("invalid JSON: {}", e))?;
+    let file: PricingFile =
+        serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("invalid JSON: {}", e))?;
 
     if file.schema_version != 1 {
         anyhow::bail!("unsupported schema_version {}", file.schema_version);

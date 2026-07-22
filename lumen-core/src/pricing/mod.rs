@@ -62,14 +62,26 @@ impl PricingDatabase {
         // GPT-5.x family (released 2025-2026)
         // All use 10% cached-input rate. -pro variants must be explicit so they
         // aren't fuzzy-matched down to the base model's much cheaper rate.
-        db.add("openai", "gpt-5.5",          5.00,  30.00, Some(0.50),  None);
-        db.add("openai", "gpt-5.5-pro",     30.00, 180.00, None,         None);
-        db.add("openai", "gpt-5.4",          2.50,  15.00, Some(0.25),  None);
-        db.add("openai", "gpt-5.4-mini",     0.75,   4.50, Some(0.075), None);
-        db.add("openai", "gpt-5.4-nano",     0.20,   1.25, Some(0.02),  None);
-        db.add("openai", "gpt-5.4-pro",     30.00, 180.00, None,         None);
-        db.add("openai", "gpt-5.3-codex",    1.75,  14.00, Some(0.175), None);
-        db.add("openai", "gpt-5.1-codex-mini", 0.25, 2.00, Some(0.025), None);
+        // GPT-5.6 family (GA 2026-07-09): sol = frontier, terra = balanced,
+        // luna = cost/high-volume. Cache write is 1.25x input (not tracked here).
+        db.add("openai", "gpt-5.6-sol", 5.00, 30.00, Some(0.50), None);
+        db.add("openai", "gpt-5.6-terra", 2.50, 15.00, Some(0.25), None);
+        db.add("openai", "gpt-5.6-luna", 1.00, 6.00, Some(0.10), None);
+        db.add("openai", "gpt-5.5", 5.00, 30.00, Some(0.50), None);
+        db.add("openai", "gpt-5.5-pro", 30.00, 180.00, None, None);
+        db.add("openai", "gpt-5.4", 2.50, 15.00, Some(0.25), None);
+        db.add("openai", "gpt-5.4-mini", 0.75, 4.50, Some(0.075), None);
+        db.add("openai", "gpt-5.4-nano", 0.20, 1.25, Some(0.02), None);
+        db.add("openai", "gpt-5.4-pro", 30.00, 180.00, None, None);
+        db.add("openai", "gpt-5.3-codex", 1.75, 14.00, Some(0.175), None);
+        db.add(
+            "openai",
+            "gpt-5.1-codex-mini",
+            0.25,
+            2.00,
+            Some(0.025),
+            None,
+        );
 
         db.add("openai", "gpt-4o", 2.50, 10.00, Some(1.25), None);
         // Dated snapshot with different (higher) rate — must be explicit so it isn't
@@ -177,6 +189,16 @@ impl PricingDatabase {
             Some(6.25),
         );
 
+        // Claude 5 family (2026). Fable 5 = premium $10/$50 tier.
+        db.add(
+            "anthropic",
+            "claude-fable-5",
+            10.00,
+            50.00,
+            Some(1.00),
+            Some(12.50),
+        );
+
         // Sonnet 4 family — $3/$15 tier
         db.add(
             "anthropic",
@@ -213,6 +235,18 @@ impl PricingDatabase {
         db.add(
             "anthropic",
             "claude-sonnet-4-6",
+            3.00,
+            15.00,
+            Some(0.30),
+            Some(3.75),
+        );
+        // Sonnet 5 STANDARD pricing (effective 2026-09-01). Intro pricing of
+        // $2/$10 (cache read $0.20, 5m write $2.50) runs through 2026-08-31 —
+        // push that via the remote pricing file if you want it tracked during
+        // the promo, since a static default can't time-gate.
+        db.add(
+            "anthropic",
+            "claude-sonnet-5",
             3.00,
             15.00,
             Some(0.30),
@@ -263,8 +297,47 @@ impl PricingDatabase {
             Some(0.30),
         );
 
-        db.add("google", "gemini-2.5-pro", 1.25, 10.00, None, None);
-        db.add("google", "gemini-2.5-flash", 0.15, 0.60, None, None);
+        // Gemini flat rates use the <=200k-context TEXT tier. The DB can't
+        // represent Gemini's >200k tier or its higher audio-input rates; cache
+        // is the per-token cached-read rate (hourly storage is not modeled).
+        // Gemini 3 family (2026)
+        db.add(
+            "google",
+            "gemini-3.1-pro-preview",
+            2.00,
+            12.00,
+            Some(0.20),
+            None,
+        );
+        db.add("google", "gemini-3.6-flash", 1.50, 7.50, Some(0.15), None);
+        db.add("google", "gemini-3.5-flash", 1.50, 9.00, Some(0.15), None);
+        db.add(
+            "google",
+            "gemini-3.5-flash-lite",
+            0.30,
+            2.50,
+            Some(0.03),
+            None,
+        );
+        db.add(
+            "google",
+            "gemini-3.1-flash-lite",
+            0.25,
+            1.50,
+            Some(0.025),
+            None,
+        );
+        // Gemini 2.5 family
+        db.add("google", "gemini-2.5-pro", 1.25, 10.00, Some(0.125), None);
+        db.add("google", "gemini-2.5-flash", 0.30, 2.50, Some(0.03), None);
+        db.add(
+            "google",
+            "gemini-2.5-flash-lite",
+            0.10,
+            0.40,
+            Some(0.01),
+            None,
+        );
         db.add("google", "gemini-2.0-flash", 0.10, 0.40, None, None);
         db.add("google", "gemini-1.5-pro", 1.25, 5.00, None, None);
         db.add("google", "gemini-1.5-flash", 0.075, 0.30, None, None);
@@ -299,12 +372,54 @@ impl PricingDatabase {
         // gRPC responses, these should be revisited (and likely raised toward
         // the underlying Anthropic/OpenAI direct rates).
         // ----------------------------------------------------------------------
-        db.add("cursor", "claude-opus-4-7", 3.00, 5.00, Some(0.30), Some(3.75));
-        db.add("cursor", "claude-opus-4", 3.00, 5.00, Some(0.30), Some(3.75));
-        db.add("cursor", "claude-sonnet-4-6", 0.60, 1.00, Some(0.06), Some(0.75));
-        db.add("cursor", "claude-sonnet-4", 0.60, 1.00, Some(0.06), Some(0.75));
-        db.add("cursor", "claude-haiku-4-5", 0.16, 0.27, Some(0.016), Some(0.20));
-        db.add("cursor", "claude-haiku-4", 0.16, 0.27, Some(0.016), Some(0.20));
+        db.add(
+            "cursor",
+            "claude-opus-4-7",
+            3.00,
+            5.00,
+            Some(0.30),
+            Some(3.75),
+        );
+        db.add(
+            "cursor",
+            "claude-opus-4",
+            3.00,
+            5.00,
+            Some(0.30),
+            Some(3.75),
+        );
+        db.add(
+            "cursor",
+            "claude-sonnet-4-6",
+            0.60,
+            1.00,
+            Some(0.06),
+            Some(0.75),
+        );
+        db.add(
+            "cursor",
+            "claude-sonnet-4",
+            0.60,
+            1.00,
+            Some(0.06),
+            Some(0.75),
+        );
+        db.add(
+            "cursor",
+            "claude-haiku-4-5",
+            0.16,
+            0.27,
+            Some(0.016),
+            Some(0.20),
+        );
+        db.add(
+            "cursor",
+            "claude-haiku-4",
+            0.16,
+            0.27,
+            Some(0.016),
+            Some(0.20),
+        );
 
         // Cursor's own first-party models (Composer family) — flat, very cheap.
         // composer-2-fast invoices around $0.75/MTok blended.
@@ -662,7 +777,14 @@ mod tests {
         // That's within ~2x of the $2.74 invoice — vs the $24.08 we'd compute
         // with the Anthropic-direct $25/MTok rate.
         let db = PricingDatabase::with_defaults();
-        let cost = db.calculate_cost(LLMProvider::Cursor, "claude-opus-4-7", 0, 963_100, None, None);
+        let cost = db.calculate_cost(
+            LLMProvider::Cursor,
+            "claude-opus-4-7",
+            0,
+            963_100,
+            None,
+            None,
+        );
         assert!(
             cost.total_cost < 6.0,
             "cost should be in the ~$2-5 ballpark, got {}",
@@ -835,23 +957,103 @@ mod tests {
     }
 
     #[test]
+    fn test_2026_families_priced() {
+        // Claude 5 (Anthropic) + Gemini 3 (Google) families, plus the corrected
+        // gemini-2.5-flash rate ($0.30/$2.50 — it was mistakenly $0.15/$0.60).
+        let db = PricingDatabase::with_defaults();
+        let cases = [
+            (
+                LLMProvider::Anthropic,
+                "claude-sonnet-5",
+                3.00_f64,
+                15.00_f64,
+            ),
+            (LLMProvider::Anthropic, "claude-fable-5", 10.00, 50.00),
+            (LLMProvider::Google, "gemini-3.1-pro-preview", 2.00, 12.00),
+            (LLMProvider::Google, "gemini-3.6-flash", 1.50, 7.50),
+            (LLMProvider::Google, "gemini-3.5-flash", 1.50, 9.00),
+            (LLMProvider::Google, "gemini-3.5-flash-lite", 0.30, 2.50),
+            (LLMProvider::Google, "gemini-3.1-flash-lite", 0.25, 1.50),
+            (LLMProvider::Google, "gemini-2.5-flash", 0.30, 2.50),
+            (LLMProvider::Google, "gemini-2.5-flash-lite", 0.10, 0.40),
+        ];
+        for (provider, model, exp_in, exp_out) in cases {
+            let cost = db.calculate_cost(provider, model, 1_000_000, 1_000_000, None, None);
+            assert!(
+                (cost.input_cost - exp_in).abs() < 0.01,
+                "{model}: expected ${exp_in} input, got {}",
+                cost.input_cost
+            );
+            assert!(
+                (cost.output_cost - exp_out).abs() < 0.01,
+                "{model}: expected ${exp_out} output, got {}",
+                cost.output_cost
+            );
+        }
+    }
+
+    #[test]
+    fn pricing_json_matches_defaults() {
+        // The checked-in lumen-core/pricing.json is served remotely and cached
+        // by every client, and `from_file` REPLACES the compiled-in defaults
+        // (it does not merge). So every model in with_defaults() must also exist
+        // in pricing.json at the same price — otherwise deployed clients holding
+        // a cached pricing.json silently get stale rates for anything added only
+        // to the Rust defaults. If this fails, mirror your with_defaults() change
+        // into lumen-core/pricing.json.
+        fn opt_close(a: Option<f64>, b: Option<f64>) -> bool {
+            match (a, b) {
+                (None, None) => true,
+                (Some(x), Some(y)) => (x - y).abs() < 1e-9,
+                _ => false,
+            }
+        }
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("pricing.json");
+        let content = std::fs::read_to_string(&path).expect("pricing.json is present");
+        let file: PricingFile = serde_json::from_str(&content).expect("pricing.json parses");
+        let json = PricingDatabase::from_file(&file);
+        let defaults = PricingDatabase::with_defaults();
+
+        for (key, d) in &defaults.models {
+            let j = json.models.get(key).unwrap_or_else(|| {
+                panic!("pricing.json is missing `{key}` (present in with_defaults()) — add it to lumen-core/pricing.json")
+            });
+            assert!(
+                (j.input_per_mtok - d.input_per_mtok).abs() < 1e-9
+                    && (j.output_per_mtok - d.output_per_mtok).abs() < 1e-9
+                    && opt_close(j.cache_read_per_mtok, d.cache_read_per_mtok)
+                    && opt_close(j.cache_write_per_mtok, d.cache_write_per_mtok),
+                "pricing.json `{key}` = ({}/{}, r={:?}, w={:?}) disagrees with with_defaults() ({}/{}, r={:?}, w={:?})",
+                j.input_per_mtok, j.output_per_mtok, j.cache_read_per_mtok, j.cache_write_per_mtok,
+                d.input_per_mtok, d.output_per_mtok, d.cache_read_per_mtok, d.cache_write_per_mtok,
+            );
+        }
+    }
+
+    #[test]
     fn test_gpt_4_1_family_priced() {
         let db = PricingDatabase::with_defaults();
         for (model, exp_in, exp_out) in [
-            ("gpt-4.1",      2.00_f64, 8.00_f64),
-            ("gpt-4.1-mini", 0.40,     1.60),
-            ("gpt-4.1-nano", 0.10,     0.40),
+            ("gpt-4.1", 2.00_f64, 8.00_f64),
+            ("gpt-4.1-mini", 0.40, 1.60),
+            ("gpt-4.1-nano", 0.10, 0.40),
         ] {
-            let cost = db.calculate_cost(LLMProvider::OpenAI, model, 1_000_000, 1_000_000, None, None);
+            let cost =
+                db.calculate_cost(LLMProvider::OpenAI, model, 1_000_000, 1_000_000, None, None);
             assert!(
                 (cost.input_cost - exp_in).abs() < 0.001,
                 "{}: expected ${} input, got {}",
-                model, exp_in, cost.input_cost
+                model,
+                exp_in,
+                cost.input_cost
             );
             assert!(
                 (cost.output_cost - exp_out).abs() < 0.001,
                 "{}: expected ${} output, got {}",
-                model, exp_out, cost.output_cost
+                model,
+                exp_out,
+                cost.output_cost
             );
         }
     }
@@ -863,25 +1065,33 @@ mod tests {
     fn test_gpt5_family_no_fuzzy_bleed() {
         let db = PricingDatabase::with_defaults();
         for (model, exp_in, exp_out) in [
-            ("gpt-5.5",          5.00_f64,  30.00_f64),
-            ("gpt-5.5-pro",     30.00,     180.00),
-            ("gpt-5.4",          2.50,      15.00),
-            ("gpt-5.4-mini",     0.75,       4.50),
-            ("gpt-5.4-nano",     0.20,       1.25),
-            ("gpt-5.4-pro",     30.00,     180.00),
-            ("gpt-5.3-codex",    1.75,      14.00),
-            ("gpt-5.1-codex-mini", 0.25,    2.00),
+            ("gpt-5.6-sol", 5.00_f64, 30.00_f64),
+            ("gpt-5.6-terra", 2.50, 15.00),
+            ("gpt-5.6-luna", 1.00, 6.00),
+            ("gpt-5.5", 5.00_f64, 30.00_f64),
+            ("gpt-5.5-pro", 30.00, 180.00),
+            ("gpt-5.4", 2.50, 15.00),
+            ("gpt-5.4-mini", 0.75, 4.50),
+            ("gpt-5.4-nano", 0.20, 1.25),
+            ("gpt-5.4-pro", 30.00, 180.00),
+            ("gpt-5.3-codex", 1.75, 14.00),
+            ("gpt-5.1-codex-mini", 0.25, 2.00),
         ] {
-            let cost = db.calculate_cost(LLMProvider::OpenAI, model, 1_000_000, 1_000_000, None, None);
+            let cost =
+                db.calculate_cost(LLMProvider::OpenAI, model, 1_000_000, 1_000_000, None, None);
             assert!(
                 (cost.input_cost - exp_in).abs() < 0.001,
                 "{}: expected ${} input, got {}",
-                model, exp_in, cost.input_cost
+                model,
+                exp_in,
+                cost.input_cost
             );
             assert!(
                 (cost.output_cost - exp_out).abs() < 0.001,
                 "{}: expected ${} output, got {}",
-                model, exp_out, cost.output_cost
+                model,
+                exp_out,
+                cost.output_cost
             );
         }
     }
@@ -892,20 +1102,25 @@ mod tests {
     fn test_o1_pro_and_o3_pro_not_misprice_as_o1_o3() {
         let db = PricingDatabase::with_defaults();
         for (model, exp_in, exp_out) in [
-            ("o1-pro",          150.00_f64, 600.00_f64),
-            ("o3-pro",           20.00,      80.00),
-            ("codex-mini-latest", 1.50,       6.00),
+            ("o1-pro", 150.00_f64, 600.00_f64),
+            ("o3-pro", 20.00, 80.00),
+            ("codex-mini-latest", 1.50, 6.00),
         ] {
-            let cost = db.calculate_cost(LLMProvider::OpenAI, model, 1_000_000, 1_000_000, None, None);
+            let cost =
+                db.calculate_cost(LLMProvider::OpenAI, model, 1_000_000, 1_000_000, None, None);
             assert!(
                 (cost.input_cost - exp_in).abs() < 0.001,
                 "{}: expected ${} input, got {}",
-                model, exp_in, cost.input_cost
+                model,
+                exp_in,
+                cost.input_cost
             );
             assert!(
                 (cost.output_cost - exp_out).abs() < 0.001,
                 "{}: expected ${} output, got {}",
-                model, exp_out, cost.output_cost
+                model,
+                exp_out,
+                cost.output_cost
             );
         }
     }
@@ -916,9 +1131,22 @@ mod tests {
     fn test_gpt4o_old_snapshot_uses_higher_rate() {
         let db = PricingDatabase::with_defaults();
         let current = db.calculate_cost(LLMProvider::OpenAI, "gpt-4o", 1_000_000, 0, None, None);
-        let old     = db.calculate_cost(LLMProvider::OpenAI, "gpt-4o-2024-05-13", 1_000_000, 0, None, None);
-        assert!((current.input_cost - 2.50).abs() < 0.001, "gpt-4o should be $2.50");
-        assert!((old.input_cost - 5.00).abs() < 0.001, "gpt-4o-2024-05-13 should be $5.00");
+        let old = db.calculate_cost(
+            LLMProvider::OpenAI,
+            "gpt-4o-2024-05-13",
+            1_000_000,
+            0,
+            None,
+            None,
+        );
+        assert!(
+            (current.input_cost - 2.50).abs() < 0.001,
+            "gpt-4o should be $2.50"
+        );
+        assert!(
+            (old.input_cost - 5.00).abs() < 0.001,
+            "gpt-4o-2024-05-13 should be $5.00"
+        );
     }
 
     #[test]
@@ -937,7 +1165,12 @@ mod tests {
         let file: PricingFile = serde_json::from_str(json).expect("should parse");
         let db = PricingDatabase::from_file(&file);
         let cost = db.calculate_cost(
-            LLMProvider::Anthropic, "test-model", 1_000_000, 1_000_000, None, None,
+            LLMProvider::Anthropic,
+            "test-model",
+            1_000_000,
+            1_000_000,
+            None,
+            None,
         );
         assert!((cost.input_cost - 7.00).abs() < 0.001);
         assert!((cost.output_cost - 21.00).abs() < 0.001);
@@ -959,20 +1192,44 @@ mod tests {
         // The canonical pricing.json committed to the repo must parse cleanly
         // and produce a non-empty database that includes key models.
         let content = include_str!("../../pricing.json");
-        let file: PricingFile = serde_json::from_str(content).expect("pricing.json should be valid JSON");
+        let file: PricingFile =
+            serde_json::from_str(content).expect("pricing.json should be valid JSON");
         assert_eq!(file.schema_version, 1, "schema_version must be 1");
         assert!(!file.models.is_empty(), "models list must not be empty");
 
         let db = PricingDatabase::from_file(&file);
 
         // Spot-check corrected models
-        let opus = db.calculate_cost(LLMProvider::Anthropic, "claude-opus-4-7", 1_000_000, 0, None, None);
-        assert!((opus.input_cost - 5.00).abs() < 0.01, "opus-4-7 input should be $5");
+        let opus = db.calculate_cost(
+            LLMProvider::Anthropic,
+            "claude-opus-4-7",
+            1_000_000,
+            0,
+            None,
+            None,
+        );
+        assert!(
+            (opus.input_cost - 5.00).abs() < 0.01,
+            "opus-4-7 input should be $5"
+        );
 
-        let haiku = db.calculate_cost(LLMProvider::Anthropic, "claude-haiku-4-5", 0, 1_000_000, None, None);
-        assert!((haiku.output_cost - 5.00).abs() < 0.01, "haiku-4-5 output should be $5");
+        let haiku = db.calculate_cost(
+            LLMProvider::Anthropic,
+            "claude-haiku-4-5",
+            0,
+            1_000_000,
+            None,
+            None,
+        );
+        assert!(
+            (haiku.output_cost - 5.00).abs() < 0.01,
+            "haiku-4-5 output should be $5"
+        );
 
         let gpt41 = db.calculate_cost(LLMProvider::OpenAI, "gpt-4.1", 1_000_000, 0, None, None);
-        assert!((gpt41.input_cost - 2.00).abs() < 0.01, "gpt-4.1 input should be $2");
+        assert!(
+            (gpt41.input_cost - 2.00).abs() < 0.01,
+            "gpt-4.1 input should be $2"
+        );
     }
 }
