@@ -266,7 +266,10 @@ pub async fn rotate_identity(
         .unwrap_or_else(|| PathBuf::from(".conduit"));
     ConduitIdentity::save_to_dir(&dir, &reg.id, &reg.cert_pem, &key_pem_str, &reg.ca_cert_pem)?;
 
-    info!("conduit: rotated identity sub_id={} (fresh cert issued)", reg.id);
+    info!(
+        "conduit: rotated identity sub_id={} (fresh cert issued)",
+        reg.id
+    );
 
     Ok(ConduitIdentity {
         cert_pem: reg.cert_pem.into_bytes(),

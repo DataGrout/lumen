@@ -2,6 +2,8 @@ mod aggregator;
 mod api;
 mod ca;
 mod conduit;
+#[cfg(target_os = "macos")]
+mod nat_lookup;
 mod parser;
 mod pricing;
 mod proxy;
@@ -11,8 +13,6 @@ mod state;
 mod sync;
 mod tls;
 mod traffic;
-#[cfg(target_os = "macos")]
-mod nat_lookup;
 #[cfg(target_os = "macos")]
 mod transparent;
 
@@ -124,6 +124,10 @@ async fn main() {
 
         if let Err(e) = proxy_clone.start().await {
             tracing::error!("Proxy error: {}", e);
+            // Keep the status flag honest — a dead proxy must not report
+            // `running: true` on /health and /proxy/config, or a supervising
+            // tray/launcher (and the dashboard) can't tell it went down.
+            proxy_state.proxy_config.write().running = false;
         }
     });
 
@@ -232,7 +236,10 @@ async fn main() {
     let mut shutdown_rx = app_state.shutdown_rx.clone();
     tokio::select! {
         _ = api_handle => tracing::info!("API server exited"),
-        _ = proxy_handle => tracing::info!("Proxy exited"),
+        _ = proxy_handle => tracing::warn!(
+            "Proxy task exited — the daemon is shutting down. If this was immediate, \
+             the proxy could not bind its port (see the error above)."
+        ),
         _ = sigterm_handle => tracing::info!("Signal handler triggered"),
         _ = async {
             loop {

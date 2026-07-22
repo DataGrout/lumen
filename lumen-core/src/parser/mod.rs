@@ -177,7 +177,9 @@ pub fn scan_bytes_for_model(bytes: &[u8]) -> Option<String> {
         let preview_len = {
             let max = text.len().min(300);
             let mut i = max;
-            while i > 0 && !text.is_char_boundary(i) { i -= 1; }
+            while i > 0 && !text.is_char_boundary(i) {
+                i -= 1;
+            }
             i
         };
         tracing::debug!(

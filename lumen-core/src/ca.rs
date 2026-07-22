@@ -13,6 +13,11 @@ pub struct LumenCA {
     pub cert_pem: String,
     pub key_pem: String,
     key_pair: KeyPair,
+    // The CA certificate used as the issuer when signing leaves. rcgen consumes
+    // `CertificateParams` on sign, so this used to be rebuilt and re-self-signed
+    // on every `issue_leaf` call — wasted crypto on the proxy hot path during
+    // the cold-start cert storm. Built once, lazily, and reused.
+    signing_cert: std::sync::OnceLock<rcgen::Certificate>,
 }
 
 impl LumenCA {
@@ -94,6 +99,7 @@ impl LumenCA {
             cert_pem,
             key_pem,
             key_pair,
+            signing_cert: std::sync::OnceLock::from(cert),
         })
     }
 
@@ -107,7 +113,34 @@ impl LumenCA {
             cert_pem,
             key_pem,
             key_pair,
+            signing_cert: std::sync::OnceLock::new(),
         })
+    }
+
+    /// The CA certificate used as the signing issuer for leaves, built once and
+    /// cached. Its own serial/validity are irrelevant to leaf validation —
+    /// clients trust the on-disk CA by its key + DN — so a params shape without
+    /// them matches the previous per-leaf behavior, just computed a single time.
+    fn signing_cert(&self) -> Result<&rcgen::Certificate> {
+        if let Some(cert) = self.signing_cert.get() {
+            return Ok(cert);
+        }
+
+        let mut ca_params = CertificateParams::default();
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "Lumen Local CA");
+        ca_params
+            .distinguished_name
+            .push(DnType::OrganizationName, "Lumen by DataGrout");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+        ];
+        let cert = ca_params.self_signed(&self.key_pair)?;
+        Ok(self.signing_cert.get_or_init(|| cert))
     }
 
     /// Issue a leaf certificate for the given hostname, signed by this CA.
@@ -136,23 +169,8 @@ impl LumenCA {
             leaf_after.format("%d").to_string().parse().unwrap_or(1),
         );
 
-        // Re-create CA params for signing (rcgen consumes params on sign)
-        let mut ca_params = CertificateParams::default();
-        ca_params
-            .distinguished_name
-            .push(DnType::CommonName, "Lumen Local CA");
-        ca_params
-            .distinguished_name
-            .push(DnType::OrganizationName, "Lumen by DataGrout");
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca_params.key_usages = vec![
-            KeyUsagePurpose::DigitalSignature,
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::CrlSign,
-        ];
-        let ca_cert = ca_params.self_signed(&self.key_pair)?;
-
-        let leaf_cert = leaf_params.signed_by(&leaf_key, &ca_cert, &self.key_pair)?;
+        let ca_cert = self.signing_cert()?;
+        let leaf_cert = leaf_params.signed_by(&leaf_key, ca_cert, &self.key_pair)?;
         Ok((leaf_cert.pem(), leaf_key.serialize_pem()))
     }
 
@@ -173,8 +191,7 @@ fn ca_dir() -> Result<PathBuf> {
 }
 
 fn dirs_path() -> Result<PathBuf> {
-    crate::state::home_dir()
-        .context("neither HOME nor USERPROFILE environment variable is set")
+    crate::state::home_dir().context("neither HOME nor USERPROFILE environment variable is set")
 }
 
 fn rand_serial() -> SerialNumber {

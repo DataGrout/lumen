@@ -291,7 +291,10 @@ impl DGSyncer {
             if let (Some(sub_id), Some(token), Some(url)) = (sub_id, token, url) {
                 let gateway_root = Self::gateway_root(&url);
                 match crate::conduit::reissue_identity_via_sync_token(
-                    &id, &gateway_root, &sub_id, &token,
+                    &id,
+                    &gateway_root,
+                    &sub_id,
+                    &token,
                 )
                 .await
                 {
@@ -321,8 +324,7 @@ impl DGSyncer {
 
             // Fallback: don't poison the connection with the dead cert — switch
             // to bearer-only so sync keeps working in a degraded (no-mTLS) mode.
-            let already_fallback =
-                self.cert_status.read().mode == DgAuthMode::BearerFallback;
+            let already_fallback = self.cert_status.read().mode == DgAuthMode::BearerFallback;
             if !already_fallback {
                 match crate::conduit::bearer_only_client() {
                     Ok(c) => {
@@ -434,7 +436,14 @@ mod tests {
         let identity = Arc::new(RwLock::new(None));
         let cert_status = Arc::new(RwLock::new(DgCertStatus::default()));
         let _syncer = DGSyncer::new(
-            aggregator, url, client, token, sync_token, sub_id, identity, cert_status,
+            aggregator,
+            url,
+            client,
+            token,
+            sync_token,
+            sub_id,
+            identity,
+            cert_status,
         );
     }
 

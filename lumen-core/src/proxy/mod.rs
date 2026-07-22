@@ -17,6 +17,18 @@ use tracing::{debug, error, info, warn};
 
 type BoxBody = http_body_util::combinators::BoxBody<Bytes, hyper::Error>;
 
+// Await a connection from an optional listener; if there is none (the IPv6
+// loopback bind failed), pend forever so this branch never resolves in
+// `select!` and only the IPv4 listener stays active.
+async fn accept_optional(
+    listener: &Option<TcpListener>,
+) -> std::io::Result<(tokio::net::TcpStream, SocketAddr)> {
+    match listener {
+        Some(l) => l.accept().await,
+        None => std::future::pending().await,
+    }
+}
+
 fn box_body<B>(body: B) -> BoxBody
 where
     B: hyper::body::Body<Data = Bytes, Error = std::convert::Infallible> + Send + Sync + 'static,
@@ -270,18 +282,75 @@ impl LumenProxy {
     }
 
     pub async fn start(self: Arc<Self>) -> Result<()> {
-        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
-        let listener = TcpListener::bind(addr).await?;
+        // Bind IPv4 loopback (required).
+        let v4 = SocketAddr::from(([127, 0, 0, 1], self.port));
+        let listener = match TcpListener::bind(v4).await {
+            Ok(l) => l,
+            Err(e) => {
+                // A failed bind here means the proxy is NOT running: clients
+                // pointed at this port get "connection refused", which looks
+                // exactly like Lumen being off. Make it unmissable — on Windows
+                // the usual cause is a reserved/excluded port range (Hyper-V /
+                // WSL2 reserve blocks of ports; bind then fails with WSAEACCES
+                // even though nothing is "using" the port), or another process.
+                error!(
+                    "Lumen proxy FAILED to bind {} — the proxy is NOT listening. \
+                     Clients will get 'connection refused' (this looks identical to \
+                     Lumen being off). Cause: {e}. On Windows this is usually a \
+                     reserved port range or a port already in use: check \
+                     `netsh interface ipv4 show excludedportrange protocol=tcp` and \
+                     `netstat -ano | findstr :{port}`, then either free the port or \
+                     start Lumen with a different `--proxy-port`.",
+                    v4,
+                    port = self.port
+                );
+                return Err(e.into());
+            }
+        };
+        info!("Lumen proxy listening on http://{}", v4);
 
-        info!("Lumen proxy listening on http://{}", addr);
+        // Also accept on IPv6 loopback so clients that resolve `localhost` to
+        // `::1` — the default on Windows — can reach the proxy. Relay base URLs
+        // and HTTP-proxy settings are commonly written as `localhost`; without
+        // the ::1 listener those requests hit `[::1]:port`, never arrive, and no
+        // traffic is captured (the daemon looks up but sees nothing). Best-effort
+        // and loopback-only, so it never widens exposure.
+        let listener_v6 = match TcpListener::bind(SocketAddr::from((
+            [0, 0, 0, 0, 0, 0, 0, 1],
+            self.port,
+        )))
+        .await
+        {
+            Ok(l) => {
+                info!("Lumen proxy also listening on http://[::1]:{}", self.port);
+                Some(l)
+            }
+            Err(e) => {
+                warn!(
+                    "Lumen proxy: could not bind IPv6 loopback [::1]:{} ({}). If traffic \
+                         isn't captured, point clients at 127.0.0.1:{} rather than localhost.",
+                    self.port, e, self.port
+                );
+                None
+            }
+        };
 
         loop {
-            let (stream, _peer_addr) = match listener.accept().await {
-                Ok(conn) => conn,
-                Err(e) => {
-                    error!("Failed to accept connection: {}", e);
-                    continue;
-                }
+            let stream = tokio::select! {
+                r = listener.accept() => match r {
+                    Ok((s, _)) => s,
+                    Err(e) => {
+                        error!("Failed to accept connection: {}", e);
+                        continue;
+                    }
+                },
+                r = accept_optional(&listener_v6) => match r {
+                    Ok((s, _)) => s,
+                    Err(e) => {
+                        error!("Failed to accept connection (v6): {}", e);
+                        continue;
+                    }
+                },
             };
 
             let proxy = self.clone();
@@ -647,13 +716,24 @@ impl LumenProxy {
         let cert_cache = self.cert_cache.clone();
 
         tokio::spawn(async move {
-            let tls_config = match cert_cache.get_or_create(&host) {
-                Ok(config) => config,
-                Err(e) => {
-                    error!("Failed to create TLS config for {}: {}", host, e);
-                    return;
-                }
-            };
+            // Cert issuance is CPU-bound crypto (keygen + signing). When the OS
+            // system proxy is enabled every host reroutes through the cold MITM
+            // at once, so running this inline on the async workers starves the
+            // runtime and stalls all connections. Offload to the blocking pool.
+            let cc = cert_cache.clone();
+            let host_for_cert = host.clone();
+            let tls_config =
+                match tokio::task::spawn_blocking(move || cc.get_or_create(&host_for_cert)).await {
+                    Ok(Ok(config)) => config,
+                    Ok(Err(e)) => {
+                        error!("Failed to create TLS config for {}: {}", host, e);
+                        return;
+                    }
+                    Err(e) => {
+                        error!("Cert task join error for {}: {}", host, e);
+                        return;
+                    }
+                };
 
             let upgraded = match hyper::upgrade::on(req).await {
                 Ok(u) => u,
@@ -797,7 +877,8 @@ impl LumenProxy {
         }
 
         if provider == Some(parser::LLMProvider::Cursor) && !body_bytes.is_empty() {
-            let preview_len = floor_char_boundary(&request_body_str, request_body_str.len().min(500));
+            let preview_len =
+                floor_char_boundary(&request_body_str, request_body_str.len().min(500));
             debug!(
                 "CURSOR REQ {} {} body[..{}]: {}",
                 method_string,
@@ -1293,11 +1374,23 @@ mod tests {
     #[test]
     fn test_cursor_is_significant_call() {
         // BidiAppend background sync: large request, zero response -> not significant
-        assert!(!cursor_is_significant_call("/BidiService/BidiAppend", 195050, 0));
+        assert!(!cursor_is_significant_call(
+            "/BidiService/BidiAppend",
+            195050,
+            0
+        ));
         // BidiAppend small heartbeat, zero response -> not significant
-        assert!(!cursor_is_significant_call("/BidiService/BidiAppend", 80, 0));
+        assert!(!cursor_is_significant_call(
+            "/BidiService/BidiAppend",
+            80,
+            0
+        ));
         // BidiAppend with a real response -> significant
-        assert!(cursor_is_significant_call("/BidiService/BidiAppend", 100, 200));
+        assert!(cursor_is_significant_call(
+            "/BidiService/BidiAppend",
+            100,
+            200
+        ));
         // Non-BidiAppend path with small request -> not significant
         assert!(!cursor_is_significant_call("/AgentService/Run", 30, 0));
         // Non-BidiAppend path with meaningful request -> significant
@@ -1310,10 +1403,19 @@ mod tests {
     fn test_cursor_is_noise() {
         assert!(is_cursor_noise("metrics.cursor.sh", "/anything"));
         assert!(is_cursor_noise("api2.cursor.sh", "/AnalyticsService/Batch"));
-        assert!(is_cursor_noise("api2.cursor.sh", "/ReportAiCodeChangeMetrics"));
+        assert!(is_cursor_noise(
+            "api2.cursor.sh",
+            "/ReportAiCodeChangeMetrics"
+        ));
         assert!(is_cursor_noise("api2.cursor.sh", "/tev1/track"));
-        assert!(!is_cursor_noise("api2.cursor.sh", "/aiserver.v1.AiService/RunSSE"));
-        assert!(!is_cursor_noise("api2.cursor.sh", "/BidiService/BidiAppend"));
+        assert!(!is_cursor_noise(
+            "api2.cursor.sh",
+            "/aiserver.v1.AiService/RunSSE"
+        ));
+        assert!(!is_cursor_noise(
+            "api2.cursor.sh",
+            "/BidiService/BidiAppend"
+        ));
     }
 
     #[test]

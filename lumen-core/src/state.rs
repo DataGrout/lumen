@@ -32,9 +32,7 @@ pub fn load_or_create_api_token() -> String {
     let Some(home) = home_dir() else {
         return ephemeral_token();
     };
-    let path = home
-        .join(".lumen")
-        .join("api.token");
+    let path = home.join(".lumen").join("api.token");
 
     if let Ok(existing) = std::fs::read_to_string(&path) {
         let t = existing.trim().to_string();
@@ -311,8 +309,8 @@ impl AppState {
                     "conduit: stored mTLS cert is expired — using sync-token bearer auth. \
                      Reconnect DataGrout to restore mTLS."
                 );
-                let c = crate::conduit::bearer_only_client()
-                    .unwrap_or_else(|_| reqwest::Client::new());
+                let c =
+                    crate::conduit::bearer_only_client().unwrap_or_else(|_| reqwest::Client::new());
                 (c, DgAuthMode::BearerFallback)
             }
             Some(id) => {
