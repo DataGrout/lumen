@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] — 2026-07-21
+
+### Added
+
+- **Up-to-date model pricing.** Adds the newest families across all three providers so their costs are tracked instead of falling back to defaults:
+  - **OpenAI** — the GPT-5.6 family (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`), plus `gpt-5.5`/`-pro`, `gpt-5.4` (`-mini`/`-nano`/`-pro`), `gpt-5.3-codex`, `gpt-5.1-codex-mini`.
+  - **Anthropic** — `claude-fable-5` and `claude-sonnet-5` (standard rate), alongside the existing Opus 4.8 / Sonnet 4.6 / Haiku 4.5 lines.
+  - **Google** — the Gemini 3 family (`gemini-3.1-pro-preview`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`) and `gemini-2.5-flash-lite`.
+  - **Fixes** a stale `gemini-2.5-flash` rate that was tracked at `$0.15/$0.60` instead of the correct `$0.30/$2.50` (costs for it were under-reported), and adds cached-input rates to the Gemini 2.5/3 entries.
+- **One-command Windows launcher** (`scripts/lumen.ps1` + `run.bat`, with a README). It starts the daemon, verifies the proxy is *actually listening*, and launches Claude Desktop or Cursor already wired through Lumen with the CA trusted — and if the proxy didn't come up, it says so plainly instead of the failure looking exactly like "Lumen is off." A `build_exe.sh` helper is included for producing the Windows binary.
+
+### Fixed
+
+- **`localhost` now works on Windows.** The API and proxy also listen on IPv6 loopback (`::1`) now. Windows resolves `localhost` to `::1` first, so clients, relay base URLs, and the dashboard's own `fetch()` calls that used `localhost` were hitting `[::1]:port` — where nothing was listening — and failing with a bare "Failed to fetch" (or silently capturing no traffic). Both listeners are loopback-only, so there's no wider exposure.
+- **A proxy that can't start no longer looks like "Lumen is off."** If the proxy fails to bind its port (on Windows, usually a reserved/excluded port range that fails with `WSAEACCES` even when nothing is using the port), the daemon now logs an unmistakable diagnosis with the exact commands to check, and reports `running: false` on `/health` so the app and launcher can tell it went down.
+- **Claude Desktop launches from either install location** — the standalone installer and the Microsoft Store / winget build — instead of assuming one hardcoded path.
+- **No more connection stalls during the cold-start "cert storm."** When the system proxy is enabled, every host reroutes through the freshly-started MITM at once. TLS certificate generation (CPU-bound crypto) is now offloaded to a blocking thread pool, and the CA signing certificate is built once and reused instead of being rebuilt on every leaf — so the async runtime no longer starves and connections don't hang on startup.
+
 ## [0.2.1] — 2026-06-10
 
 ### Added
