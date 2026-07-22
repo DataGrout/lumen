@@ -983,7 +983,13 @@ Import-Certificate -FilePath "$env:USERPROFILE\Downloads\lumen-ca.pem" `
         { label: 'Claude Code',    cmd: `$env:ANTHROPIC_BASE_URL="${relayUrl}"; claude` },
         { label: 'OpenCode',       cmd: `$env:ANTHROPIC_BASE_URL="${relayUrl}"; opencode` },
         { label: 'Cursor',         cmd: `$env:HTTPS_PROXY="${proxyUrl}"; $env:NODE_EXTRA_CA_CERTS="${winCAPath}"; & "$env:LOCALAPPDATA\\Programs\\cursor\\Cursor.exe"` },
-        { label: 'Claude Desktop', cmd: `$env:HTTPS_PROXY="${proxyUrl}"; $env:NODE_EXTRA_CA_CERTS="${winCAPath}"; & "$env:LOCALAPPDATA\\AnthropicClaude\\Claude.exe"` },
+        // Claude Desktop installs to two different places on Windows — the
+        // standalone installer (%LOCALAPPDATA%\AnthropicClaude) and the
+        // Microsoft Store / winget build (Program Files\WindowsApps\Claude_<ver>_x64__<hash>,
+        // where the version+hash are unpredictable). Rather than hardcode one
+        // guess, resolve it at run time: glob both, ignore ACL-denied paths, and
+        // launch the newest. Fixes users having to hand-hunt the .exe path.
+        { label: 'Claude Desktop', cmd: `$env:HTTPS_PROXY="${proxyUrl}"; $env:NODE_EXTRA_CA_CERTS="${winCAPath}"; $c=(Get-ChildItem "$env:LOCALAPPDATA\\AnthropicClaude\\Claude.exe","C:\\Program Files\\WindowsApps\\Claude_*\\app\\Claude.exe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName; if ($c) { & $c } else { Write-Host "Claude.exe not found — install Claude Desktop or set the path manually" }` },
       ],
     };
 

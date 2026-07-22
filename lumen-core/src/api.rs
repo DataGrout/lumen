@@ -17,38 +17,63 @@ pub async fn start_api_server(
     port: u16,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = TcpListener::bind(addr).await?;
+    // Bind IPv4 loopback (required).
+    let v4 = SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = TcpListener::bind(v4).await?;
+    info!("Lumen API server listening on http://{}", v4);
 
-    info!("Lumen API server listening on http://{}", addr);
+    // Also listen on IPv6 loopback so browsers that resolve `localhost` to
+    // `::1` first — the default on Windows — can reach the daemon. Without it,
+    // the dashboard HTML loads over 127.0.0.1 but its same-origin `fetch()`
+    // calls to `localhost` hit `[::1]:port`, which nothing is listening on, and
+    // fail with a bare "Failed to fetch". Best-effort: keep serving on IPv4 if
+    // the ::1 bind is unavailable. Both are loopback — no wider exposure.
+    let listener_v6 =
+        match TcpListener::bind(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port))).await {
+            Ok(l) => {
+                info!("Lumen API server also listening on http://[::1]:{}", port);
+                Some(l)
+            }
+            Err(e) => {
+                warn!(
+                    "Lumen API: could not bind IPv6 loopback [::1]:{} ({}). `localhost` may fail \
+                     in browsers that prefer IPv6 — use http://127.0.0.1:{} instead.",
+                    port, e, port
+                );
+                None
+            }
+        };
+
+    let serve = |stream, state: Arc<AppState>| {
+        tokio::spawn(async move {
+            let io = TokioIo::new(stream);
+            let service = service_fn(move |req| {
+                let state = state.clone();
+                async move { handle_api_request(req, state).await }
+            });
+
+            if let Err(e) = hyper::server::conn::http1::Builder::new()
+                .serve_connection(io, service)
+                .await
+            {
+                error!("API connection error: {}", e);
+            }
+        });
+    };
 
     loop {
         tokio::select! {
             result = listener.accept() => {
-                let (stream, _) = match result {
-                    Ok(conn) => conn,
-                    Err(e) => {
-                        error!("API accept error: {}", e);
-                        continue;
-                    }
-                };
-
-                let state = state.clone();
-
-                tokio::spawn(async move {
-                    let io = TokioIo::new(stream);
-                    let service = service_fn(move |req| {
-                        let state = state.clone();
-                        async move { handle_api_request(req, state).await }
-                    });
-
-                    if let Err(e) = hyper::server::conn::http1::Builder::new()
-                        .serve_connection(io, service)
-                        .await
-                    {
-                        error!("API connection error: {}", e);
-                    }
-                });
+                match result {
+                    Ok((stream, _)) => serve(stream, state.clone()),
+                    Err(e) => error!("API accept error (v4): {}", e),
+                }
+            }
+            result = accept_optional(&listener_v6) => {
+                match result {
+                    Ok((stream, _)) => serve(stream, state.clone()),
+                    Err(e) => error!("API accept error (v6): {}", e),
+                }
             }
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
@@ -59,6 +84,18 @@ pub async fn start_api_server(
         }
     }
     Ok(())
+}
+
+// Await a connection from an optional listener. When there is none (the IPv6
+// loopback bind failed), pend forever so this branch never resolves in
+// `select!`, leaving the IPv4 and shutdown branches active.
+async fn accept_optional(
+    listener: &Option<TcpListener>,
+) -> std::io::Result<(tokio::net::TcpStream, SocketAddr)> {
+    match listener {
+        Some(l) => l.accept().await,
+        None => std::future::pending().await,
+    }
 }
 
 async fn handle_api_request(
