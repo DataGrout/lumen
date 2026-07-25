@@ -6,8 +6,10 @@ AI client (Claude Desktop, Cursor) at it. This bundle sets all of that up for
 you.
 
 WHAT'S IN THIS FOLDER
-  run.bat                              <- double-click this
-  lumen.ps1                            (the launcher run.bat calls)
+  run.bat            <- double-click this (auto-detects your installed AI client)
+  run-claude.bat     launch Claude Desktop      run-cursor.bat   launch Cursor
+  run-code.bat       launch Claude Code (CLI)   run-stop.bat     stop the daemon
+  lumen.ps1          (the launcher the .bat files call)
   lumen-core-<version>-x86_64-windows.exe   (the Lumen daemon)
 
 
@@ -25,13 +27,42 @@ wired up to Lumen. Your usage then shows in the dashboard.
 Dashboard:  http://127.0.0.1:9091/dashboard
 
 
-LAUNCH CURSOR INSTEAD OF CLAUDE
--------------------------------
-Open a terminal in this folder and run:
-    run.bat -Client Cursor
+LAUNCH A SPECIFIC CLIENT
+------------------------
+run.bat (no args) auto-detects and launches whatever you have installed. To
+pick a specific one, double-click a shim (or run the equivalent command):
+    run-claude.bat   Claude Desktop app   =  run.bat -Client Claude
+    run-code.bat     Claude Code (CLI)    =  run.bat -Client Code
+    run-cursor.bat   Cursor               =  run.bat -Client Cursor
 
-Or just start/verify the daemon without launching a client:
+Just start/verify the daemon without launching a client:
     run.bat -Client None
+
+STOP THE DAEMON: it keeps running in the background after you close the client
+(so it keeps tracking). To stop it cleanly, double-click run-stop.bat (or run
+run.bat -Stop) instead of ending it in Task Manager.
+
+NOTE: "Claude Code" (the CLI installed by claude.ai/install.ps1) and
+"Claude Desktop" (the GUI app) are different products.
+
+
+GUI CLIENTS (Claude Desktop / Cursor): FIRST-RUN TRUST STEP
+-----------------------------------------------------------
+Claude Desktop from claude.ai/download is now a packaged (MSIX) app, and it -
+like Cursor - validates TLS against the WINDOWS certificate store. So the first
+time you launch a GUI client, the launcher will:
+  * import Lumen's local CA into your CurrentUser\Root store (no admin needed),
+    so the app trusts Lumen's interception, and
+  * for the packaged Claude Desktop, persist HTTPS_PROXY / NODE_EXTRA_CA_CERTS at
+    your USER scope so the packaged app inherits them.
+
+This is a man-in-the-middle root CA for your user account - the launcher prints a
+security note when it does it. To skip the CA import:  run.bat -NoTrustCA
+To undo everything (remove the CA + clear the persisted proxy vars):
+    run.bat -Cleanup
+
+Verified working: the Claude Desktop "Code" tab tracks in the dashboard. The
+"chat"/"cowork" tabs use a different backend and are not tracked yet.
 
 
 IF IT SAYS THE PROXY ISN'T LISTENING
@@ -65,3 +96,7 @@ STOPPING LUMEN
 Close the client, then stop the daemon from a terminal:
     Invoke-RestMethod -Method Post http://127.0.0.1:9091/shutdown
 (or end the "lumen-core" process in Task Manager).
+
+To also undo the GUI first-run trust step (remove Lumen's CA from your Windows
+trust store and clear the persisted HTTPS_PROXY / NODE_EXTRA_CA_CERTS vars):
+    run.bat -Cleanup

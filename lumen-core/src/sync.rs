@@ -42,6 +42,10 @@ struct SyncEvent {
     session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lap_id: Option<String>,
+    /// OS the Lumen daemon (hence the client) runs on: windows / macos / linux.
+    platform: String,
+    /// CPU architecture of the daemon host: x86_64 / aarch64 / ...
+    arch: String,
 }
 
 impl From<&UsageEvent> for SyncEvent {
@@ -68,6 +72,8 @@ impl From<&UsageEvent> for SyncEvent {
             host,
             session_id: None,
             lap_id: Some(format!("lap_{}", e.lap_number)),
+            platform: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
         }
     }
 }

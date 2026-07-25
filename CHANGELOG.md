@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] — 2026-07-25
+
+### Added
+
+- **Windows: Claude Desktop (MSIX) support + one-click launchers.** The Windows launcher now detects and drives the *packaged (MSIX)* Claude Desktop that `claude.ai/download` ships today — it trusts Lumen's CA in the Windows certificate store (Chromium validates there, not via `NODE_EXTRA_CA_CERTS`), persists the proxy env at user scope, and launches via `Invoke-CommandInDesktopPackage`. It also supports **Claude Code** (the CLI, via the relay), and **auto-detects** whichever client is installed (`run.bat` with no args). Per-client double-click shims are included: `run-code.bat`, `run-claude.bat`, `run-cursor.bat`.
+- **`run.bat -Stop` / `run-stop.bat`** — stop the background daemon cleanly instead of ending it in Task Manager.
+- **`run.bat -Cleanup`** (and `-NoTrustCA`) — revert the CA trust + persisted proxy env, or skip the CA import entirely.
+- **Client OS/arch in usage sync** — each synced event now reports the daemon host's `platform` (windows/macos/linux) and `arch`, for origin attribution on the dashboard.
+
+### Fixed
+
+- **Claude Desktop no longer triggers an infinite Cloudflare CAPTCHA.** `claude.ai` and `a-api.anthropic.com` are no longer MITM-intercepted — they sit behind Cloudflare bot management, and intercepting them broke Claude Desktop with an unsolvable CAPTCHA loop. They carry no per-token usage anyway; the Desktop "Code" tab and Claude Code use `api.anthropic.com`, which is still captured.
+
 ## [0.2.2] — 2026-07-21
 
 ### Added

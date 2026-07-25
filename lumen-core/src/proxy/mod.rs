@@ -45,9 +45,12 @@ use crate::traffic::{TrafficEntry, TrafficLog};
 const DEFAULT_TARGETS: &[&str] = &[
     "api.openai.com",
     "api.anthropic.com",
-    "a-api.anthropic.com", // Claude Desktop (some versions)
-    "claude.ai",           // Claude Desktop web app
     "generativelanguage.googleapis.com",
+    // NOTE: claude.ai and a-api.anthropic.com are intentionally NOT intercepted.
+    // They are Claude Desktop's consumer chat/cowork + telemetry surfaces, they
+    // sit behind Cloudflare bot management, and MITM'ing them trips an infinite
+    // CAPTCHA that breaks Claude Desktop. They also carry no per-token usage: the
+    // Desktop "Code" tab uses api.anthropic.com/v1/messages, which IS captured.
 ];
 
 const DEFAULT_MAX_BODY_BYTES: u64 = 50 * 1024 * 1024; // 50 MB

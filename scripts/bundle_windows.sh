@@ -61,7 +61,7 @@ fi
 # 3. Stage the bundle contents (everything from version control + the .exe).
 rm -rf "$STAGE" "$DIST_DIR/$ZIP_NAME"
 mkdir -p "$STAGE"
-cp "$BUNDLE_SRC/lumen.ps1" "$BUNDLE_SRC/run.bat" "$BUNDLE_SRC/README.txt" "$STAGE/"
+cp "$BUNDLE_SRC"/*.ps1 "$BUNDLE_SRC"/*.bat "$BUNDLE_SRC"/README.txt "$STAGE/"
 cp "$EXE_PATH" "$STAGE/"
 
 # 4. Zip it (deterministic-ish: no extra attrs, no macOS cruft).
