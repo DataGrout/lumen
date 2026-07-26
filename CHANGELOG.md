@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - **`run.bat -Stop` / `run-stop.bat`** — stop the background daemon cleanly instead of ending it in Task Manager.
 - **`run.bat -Cleanup`** (and `-NoTrustCA`) — revert the CA trust + persisted proxy env, or skip the CA import entirely.
 - **Client OS/arch in usage sync** — each synced event now reports the daemon host's `platform` (windows/macos/linux) and `arch`, for origin attribution on the dashboard.
+- **Pricing: Claude Opus 5** (`$5`/`$25`, same tier as Opus 4.8) and **Mythos 5**, so their costs are tracked instead of falling back to defaults.
 
 ### Fixed
 

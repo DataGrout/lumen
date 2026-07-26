@@ -172,6 +172,15 @@ impl PricingDatabase {
             Some(0.50),
             Some(6.25),
         );
+        // Opus 5 (2026) is the $5/$25 tier, same as Opus 4.5-4.8.
+        db.add(
+            "anthropic",
+            "claude-opus-5",
+            5.00,
+            25.00,
+            Some(0.50),
+            Some(6.25),
+        );
         db.add(
             "anthropic",
             "claude-opus-4-8",
@@ -189,10 +198,19 @@ impl PricingDatabase {
             Some(6.25),
         );
 
-        // Claude 5 family (2026). Fable 5 = premium $10/$50 tier.
+        // Claude 5 family (2026). Fable 5 / Mythos 5 = premium $10/$50 tier
+        // (Mythos 5 is limited-availability; id follows the fable-5 naming pattern).
         db.add(
             "anthropic",
             "claude-fable-5",
+            10.00,
+            50.00,
+            Some(1.00),
+            Some(12.50),
+        );
+        db.add(
+            "anthropic",
+            "claude-mythos-5",
             10.00,
             50.00,
             Some(1.00),
@@ -969,6 +987,8 @@ mod tests {
                 15.00_f64,
             ),
             (LLMProvider::Anthropic, "claude-fable-5", 10.00, 50.00),
+            (LLMProvider::Anthropic, "claude-opus-5", 5.00, 25.00),
+            (LLMProvider::Anthropic, "claude-mythos-5", 10.00, 50.00),
             (LLMProvider::Google, "gemini-3.1-pro-preview", 2.00, 12.00),
             (LLMProvider::Google, "gemini-3.6-flash", 1.50, 7.50),
             (LLMProvider::Google, "gemini-3.5-flash", 1.50, 9.00),
