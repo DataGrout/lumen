@@ -37,6 +37,10 @@ struct SyncEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_creation_tokens: Option<u64>,
     cost_usd: f64,
+    /// Cache savings computed at capture time from the authoritative pricing DB,
+    /// so this figure is an immutable snapshot on the receiver (same as cost_usd)
+    /// and does not drift when the pricing table later changes.
+    cache_savings_usd: f64,
     host: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
@@ -69,6 +73,7 @@ impl From<&UsageEvent> for SyncEvent {
             cache_read_tokens: e.usage.cache_read_tokens,
             cache_creation_tokens: e.usage.cache_creation_tokens,
             cost_usd: e.cost.total_cost,
+            cache_savings_usd: e.cost.cache_read_savings,
             host,
             session_id: None,
             lap_id: Some(format!("lap_{}", e.lap_number)),
