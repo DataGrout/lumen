@@ -65,8 +65,12 @@ impl PricingDatabase {
         // GPT-5.6 family (GA 2026-07-09): sol = frontier, terra = balanced,
         // luna = cost/high-volume. Cache write is 1.25x input (not tracked here).
         db.add("openai", "gpt-5.6-sol", 5.00, 30.00, Some(0.50), None);
-        db.add("openai", "gpt-5.6-terra", 2.50, 15.00, Some(0.25), None);
-        db.add("openai", "gpt-5.6-luna", 1.00, 6.00, Some(0.10), None);
+        // 2026-07-30: OpenAI cut luna and terra by up to 80%. Verified against the
+        // pricing page on 2026-07-31 and corroborated by press coverage of the cut.
+        // Luna was 1.00/6.00 and terra 2.50/15.00 — a 5x overstatement for luna,
+        // which is the high-volume tier most likely to be someone's default.
+        db.add("openai", "gpt-5.6-terra", 2.00, 12.00, Some(0.20), None);
+        db.add("openai", "gpt-5.6-luna", 0.20, 1.20, Some(0.02), None);
         db.add("openai", "gpt-5.5", 5.00, 30.00, Some(0.50), None);
         db.add("openai", "gpt-5.5-pro", 30.00, 180.00, None, None);
         db.add("openai", "gpt-5.4", 2.50, 15.00, Some(0.25), None);
@@ -1086,8 +1090,8 @@ mod tests {
         let db = PricingDatabase::with_defaults();
         for (model, exp_in, exp_out) in [
             ("gpt-5.6-sol", 5.00_f64, 30.00_f64),
-            ("gpt-5.6-terra", 2.50, 15.00),
-            ("gpt-5.6-luna", 1.00, 6.00),
+            ("gpt-5.6-terra", 2.00, 12.00),
+            ("gpt-5.6-luna", 0.20, 1.20),
             ("gpt-5.5", 5.00_f64, 30.00_f64),
             ("gpt-5.5-pro", 30.00, 180.00),
             ("gpt-5.4", 2.50, 15.00),
