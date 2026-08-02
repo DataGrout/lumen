@@ -173,6 +173,41 @@ fn ephemeral_ports() -> (u16, u16) {
     (api_port, proxy_port)
 }
 
+/// Wait until the daemon reports its proxy as running, not merely that the API
+/// answers.
+///
+/// `wait_healthy` returns as soon as `/health` responds, and the API server binds
+/// before the proxy finishes starting. Any test that manipulates routes therefore
+/// raced the proxy: `POST /routes` answers 503 "proxy not running" when
+/// `state.proxy` is still `None`, while `GET /routes` has a no-proxy fallback and
+/// returns the three defaults — which is exactly the shape of the CI failure,
+/// passing the first assertion and failing the POST.
+///
+/// It surfaced on macos + crypto-ring and not on the other combinations because it
+/// is a race: whichever job is slowest to bring the proxy up loses it. Backend and
+/// OS were the symptom, not the cause.
+async fn wait_proxy_running(api_port: u16, timeout: Duration) -> bool {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/health", api_port);
+    let start = std::time::Instant::now();
+
+    loop {
+        if let Ok(resp) = client.get(&url).send().await {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if body["proxy_running"] == serde_json::Value::Bool(true) {
+                    return true;
+                }
+            }
+        }
+
+        if start.elapsed() > timeout {
+            return false;
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn wait_healthy(api_port: u16, timeout: Duration) -> bool {
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{}/health", api_port);
@@ -453,7 +488,13 @@ async fn test_unknown_route_404() {
 async fn test_routes_api() {
     let (api_port, proxy_port) = ephemeral_ports();
     let daemon = DaemonGuard::new(api_port, proxy_port);
-    assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
+
+    // The route endpoints need the PROXY, not just the API — see
+    // `wait_proxy_running`. Waiting on `/health` alone is what made this flake.
+    assert!(
+        wait_proxy_running(api_port, Duration::from_secs(15)).await,
+        "proxy did not start within 15s"
+    );
 
     let client = authed_client(&daemon.token());
 
@@ -496,7 +537,13 @@ async fn test_routes_api() {
 async fn test_relay_no_route_returns_404() {
     let (api_port, proxy_port) = ephemeral_ports();
     let _daemon = DaemonGuard::new(api_port, proxy_port);
-    assert!(wait_healthy(api_port, Duration::from_secs(5)).await);
+
+    // Talks to the PROXY port, so waiting on the API alone races it the same way
+    // test_routes_api did.
+    assert!(
+        wait_proxy_running(api_port, Duration::from_secs(15)).await,
+        "proxy did not start within 15s"
+    );
 
     // Send a request directly to the proxy port with no matching route
     let resp = reqwest::get(format!("http://127.0.0.1:{}/unknown/v1/foo", proxy_port))
