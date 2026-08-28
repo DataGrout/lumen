@@ -64,7 +64,10 @@ impl PricingDatabase {
         // aren't fuzzy-matched down to the base model's much cheaper rate.
         // GPT-5.6 family (GA 2026-07-09): sol = frontier, terra = balanced,
         // luna = cost/high-volume. Cache write is 1.25x input (not tracked here).
-        db.add("openai", "gpt-5.6-sol", 5.00, 30.00, Some(0.50), None);
+        db.add("openai", "gpt-5.6-sol", 4.00, 20.00, Some(0.40), None);
+        // Seen in production traffic while unpriced, so it was being costed by the
+        // $5/$15 unknown-model fallback with cache savings reported as zero.
+        db.add("openai", "gpt-5.2", 1.75, 14.00, Some(0.175), None);
         // 2026-07-30: OpenAI cut luna and terra by up to 80%. Verified against the
         // pricing page on 2026-07-31 and corroborated by press coverage of the cut.
         // Luna was 1.00/6.00 and terra 2.50/15.00 — a 5x overstatement for luna,
@@ -262,17 +265,17 @@ impl PricingDatabase {
             Some(0.30),
             Some(3.75),
         );
-        // Sonnet 5 STANDARD pricing (effective 2026-09-01). Intro pricing of
-        // $2/$10 (cache read $0.20, 5m write $2.50) runs through 2026-08-31 —
-        // push that via the remote pricing file if you want it tracked during
-        // the promo, since a static default can't time-gate.
+        // Sonnet 5 at $2/$10. This was introductory pricing due to rise to $3/$15 on
+        // 2026-09-01, which is why the default used to be the higher pair — but Anthropic
+        // has since made $2/$10 the standard price and cancelled that increase, so the
+        // time-gating problem the old default worked around no longer exists.
         db.add(
             "anthropic",
             "claude-sonnet-5",
-            3.00,
-            15.00,
-            Some(0.30),
-            Some(3.75),
+            2.00,
+            10.00,
+            Some(0.20),
+            Some(2.50),
         );
         db.add(
             "anthropic",
@@ -331,7 +334,10 @@ impl PricingDatabase {
             Some(0.20),
             None,
         );
-        db.add("google", "gemini-3.6-flash", 1.50, 7.50, Some(0.15), None);
+        // Promotional pricing through 2026-12-31; every rate DOUBLES on 2027-01-01
+        // (1.50 / 7.50 / 0.15). A static default cannot time-gate, so this needs
+        // revisiting in January — see the `gemini_promotional` note in pricing.json.
+        db.add("google", "gemini-3.6-flash", 0.75, 3.75, Some(0.075), None);
         db.add("google", "gemini-3.5-flash", 1.50, 9.00, Some(0.15), None);
         db.add(
             "google",
@@ -987,14 +993,14 @@ mod tests {
             (
                 LLMProvider::Anthropic,
                 "claude-sonnet-5",
-                3.00_f64,
-                15.00_f64,
+                2.00_f64,
+                10.00_f64,
             ),
             (LLMProvider::Anthropic, "claude-fable-5", 10.00, 50.00),
             (LLMProvider::Anthropic, "claude-opus-5", 5.00, 25.00),
             (LLMProvider::Anthropic, "claude-mythos-5", 10.00, 50.00),
             (LLMProvider::Google, "gemini-3.1-pro-preview", 2.00, 12.00),
-            (LLMProvider::Google, "gemini-3.6-flash", 1.50, 7.50),
+            (LLMProvider::Google, "gemini-3.6-flash", 0.75, 3.75),
             (LLMProvider::Google, "gemini-3.5-flash", 1.50, 9.00),
             (LLMProvider::Google, "gemini-3.5-flash-lite", 0.30, 2.50),
             (LLMProvider::Google, "gemini-3.1-flash-lite", 0.25, 1.50),
@@ -1089,7 +1095,7 @@ mod tests {
     fn test_gpt5_family_no_fuzzy_bleed() {
         let db = PricingDatabase::with_defaults();
         for (model, exp_in, exp_out) in [
-            ("gpt-5.6-sol", 5.00_f64, 30.00_f64),
+            ("gpt-5.6-sol", 4.00_f64, 20.00_f64),
             ("gpt-5.6-terra", 2.00, 12.00),
             ("gpt-5.6-luna", 0.20, 1.20),
             ("gpt-5.5", 5.00_f64, 30.00_f64),
