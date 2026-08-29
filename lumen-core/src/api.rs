@@ -479,14 +479,53 @@ async fn handle_api_request(
                 .unwrap());
         }
 
-        (Method::GET, "/ca/info") => json_response(
-            StatusCode::OK,
-            &serde_json::json!({
-                "path": crate::ca::LumenCA::cert_path().ok().map(|p| p.to_string_lossy().into_owned()),
-                "subject": "Lumen Local CA",
-                "issuer": "Lumen by DataGrout",
-            }),
-        ),
+        (Method::GET, "/ca/info") => {
+            let health = state.cert_cache.ca_health();
+            let not_after = state
+                .ca
+                .not_after()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+
+            json_response(
+                StatusCode::OK,
+                &serde_json::json!({
+                    "path": crate::ca::LumenCA::cert_path().ok().map(|p| p.to_string_lossy().into_owned()),
+                    "subject": "Lumen Local CA",
+                    "issuer": "Lumen by DataGrout",
+                    // The certificate's own expiry, so the UI can warn ahead of the
+                    // cliff rather than reporting it afterwards.
+                    "expires_at": not_after,
+                    "health": match health {
+                        crate::ca::CaHealth::Healthy => "healthy",
+                        crate::ca::CaHealth::ExpiringSoon => "expiring_soon",
+                        crate::ca::CaHealth::Expired => "expired",
+                        crate::ca::CaHealth::Unreadable => "unreadable",
+                    },
+                    // True when the proxy has stood down to plain tunnelling: the
+                    // user's requests still work, but nothing is being captured.
+                    "capture_paused": !health.usable(),
+                }),
+            )
+        }
+
+        // Renew the local CA on demand. Writing the files is half the repair —
+        // `needs_trust` says the other half needs the user's password.
+        (Method::POST, "/ca/renew") => match crate::ca::LumenCA::regenerate() {
+            Ok(()) => json_response(
+                StatusCode::OK,
+                &serde_json::json!({
+                    "ok": true,
+                    "needs_trust": true,
+                    "restart_required": true,
+                    "message": "A new CA was written. Restart Lumen to load it, then trust it."
+                }),
+            ),
+            Err(e) => json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &serde_json::json!({"ok": false, "error": e.to_string()}),
+            ),
+        },
 
         (Method::POST, "/debug/arm") => {
             state.sample_capture.arm();

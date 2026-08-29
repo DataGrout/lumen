@@ -112,6 +112,8 @@ pub struct LumenProxy {
     relay_routes: RwLock<HashMap<String, String>>,
     sample_capture: Arc<SampleCapture>,
     body_limits: Arc<RwLock<BodyLimits>>,
+    /// Whether the "CA expired, capture paused" warning has already been logged.
+    ca_warned: std::sync::atomic::AtomicBool,
     /// Last successfully extracted model name from a Cursor request.
     /// Used as fallback when subsequent requests don't contain the model field.
     cursor_last_model: RwLock<Option<String>>,
@@ -204,6 +206,7 @@ impl LumenProxy {
             relay_routes: RwLock::new(default_routes()),
             sample_capture,
             body_limits,
+            ca_warned: std::sync::atomic::AtomicBool::new(false),
             cursor_last_model: RwLock::new(None),
         }
     }
@@ -661,7 +664,20 @@ impl LumenProxy {
             .map(|a| a.to_string())
             .unwrap_or_default();
         let host = addr.split(':').next().unwrap_or("").to_string();
-        let is_monitored = self.is_monitored(&host);
+
+        // Intercept only if we can still present a certificate clients accept.
+        //
+        // An expired CA does not degrade capture, it destroys the connection:
+        // every MITMed request fails ERR_CERT_DATE_INVALID and the user cannot
+        // reach the upstream at all. Standing down to a plain tunnel costs this
+        // session's capture and keeps the user working; /ca/info reports the
+        // reason so the app can offer the renewal.
+        let ca_usable = self.cert_cache.ca_usable();
+        let is_monitored = self.is_monitored(&host) && ca_usable;
+
+        if !ca_usable {
+            self.warn_ca_unusable_once();
+        }
 
         debug!("CONNECT {} (monitored: {})", addr, is_monitored);
 
@@ -708,6 +724,19 @@ impl LumenProxy {
         });
 
         Ok(Response::new(box_body(Full::new(Bytes::new()))))
+    }
+
+    /// Say why capture stopped — once per daemon run, not once per connection.
+    fn warn_ca_unusable_once(&self) {
+        use std::sync::atomic::Ordering;
+
+        if !self.ca_warned.swap(true, Ordering::Relaxed) {
+            warn!(
+                "Lumen's local CA is expired — capture is PAUSED and traffic is being \
+                 tunnelled through unmodified so requests keep working. Renew the \
+                 certificate from Lumen's settings (it must then be re-trusted)."
+            );
+        }
     }
 
     async fn handle_connect_mitm(

@@ -14,6 +14,26 @@ const CA_KEY_FILE: &str = "ca-key.pem";
 /// the old certificate still works rather than after it has already broken.
 const REGEN_BEFORE_EXPIRY: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
 
+/// How usable the local CA is for signing leaves clients will accept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaHealth {
+    Healthy,
+    /// Still valid, but inside the rotation window — renew at next opportunity.
+    ExpiringSoon,
+    /// Past `notAfter`. Every leaf it signs is rejected as ERR_CERT_DATE_INVALID.
+    Expired,
+    /// Cannot be parsed. Treated as usable: a parser quirk must not be grounds
+    /// for disabling capture on a CA that clients may be accepting perfectly well.
+    Unreadable,
+}
+
+impl CaHealth {
+    /// Can this CA still sign leaves worth presenting to a client?
+    pub fn usable(self) -> bool {
+        !matches!(self, CaHealth::Expired)
+    }
+}
+
 pub struct LumenCA {
     pub cert_pem: String,
     pub key_pem: String,
@@ -86,6 +106,72 @@ impl LumenCA {
         Ok(ca)
     }
 
+    /// Mint a new CA and write it over the existing one.
+    ///
+    /// Exposed so the app can offer "renew" when the certificate has expired,
+    /// rather than the user's only route being to delete `~/.lumen` by hand from
+    /// a terminal — which is what the situation previously demanded and what
+    /// nobody who hits it is in a position to know.
+    ///
+    /// Writing the files is only half the repair. The new CA is untrusted until
+    /// the system trust store is updated, which needs the user's password, so the
+    /// caller must follow this with the trust step and a daemon restart to load it.
+    pub fn regenerate() -> Result<()> {
+        let dir = ca_dir()?;
+        let ca = Self::generate()?;
+
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join(CA_CERT_FILE), &ca.cert_pem)?;
+        let key_path = dir.join(CA_KEY_FILE);
+        std::fs::write(&key_path, &ca.key_pem)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
+        info!("CA regenerated at {} — it must now be re-trusted", dir.display());
+        Ok(())
+    }
+
+    /// What state is this CA in right now?
+    ///
+    /// The distinction that matters is `Expired` vs everything else: an expired
+    /// CA cannot sign a leaf any client will accept, so continuing to MITM with
+    /// it does not degrade capture — it breaks the user's connection entirely.
+    /// See `CertCache::ca_usable`, which turns this into a decision to stop
+    /// intercepting rather than to keep failing.
+    pub fn health(&self) -> CaHealth {
+        match self.not_after() {
+            None => CaHealth::Unreadable,
+            Some(not_after) => {
+                let now = std::time::SystemTime::now();
+                if not_after <= now {
+                    CaHealth::Expired
+                } else if not_after <= now + REGEN_BEFORE_EXPIRY {
+                    CaHealth::ExpiringSoon
+                } else {
+                    CaHealth::Healthy
+                }
+            }
+        }
+    }
+
+    /// The certificate's own `notAfter`, or `None` when it cannot be parsed.
+    pub fn not_after(&self) -> Option<std::time::SystemTime> {
+        use x509_parser::prelude::*;
+
+        let (_, pem) = parse_x509_pem(self.cert_pem.as_bytes()).ok()?;
+        let (_, cert) = parse_x509_certificate(&pem.contents).ok()?;
+
+        let ts = cert.validity().not_after.timestamp();
+        if ts < 0 {
+            return None;
+        }
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts as u64))
+    }
+
     /// Is this CA already expired, or close enough that it will expire before a
     /// user plausibly restarts the daemon again?
     ///
@@ -93,23 +179,8 @@ impl LumenCA {
     /// "keep using it", since a working CA is worth more than a speculative
     /// rotation that costs the user their keychain trust.
     pub fn expires_within(&self, window: std::time::Duration) -> Option<bool> {
-        use x509_parser::prelude::*;
-
-        let (_, pem) = parse_x509_pem(self.cert_pem.as_bytes()).ok()?;
-        let (_, cert) = parse_x509_certificate(&pem.contents).ok()?;
-
-        let not_after = cert.validity().not_after.timestamp();
-        if not_after < 0 {
-            return None;
-        }
-
-        let deadline = std::time::SystemTime::now() + window;
-        let deadline_secs = deadline
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_secs();
-
-        Some((not_after as u64) <= deadline_secs)
+        let not_after = self.not_after()?;
+        Some(not_after <= std::time::SystemTime::now() + window)
     }
 
     fn generate() -> Result<Self> {
