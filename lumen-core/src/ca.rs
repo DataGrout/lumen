@@ -200,11 +200,24 @@ impl LumenCA {
             KeyUsagePurpose::CrlSign,
         ];
         params.serial_number = Some(rand_serial());
-        // 1-year validity — short-lived for a local dev tool.
-        // Users re-generate by deleting ~/.lumen/ and restarting.
+        // Ten-year validity, because renewal is not free for the user.
+        //
+        // A renewed CA is a NEW key pair and therefore a different certificate
+        // with a different fingerprint, and macOS trust settings are per
+        // certificate — so trust never carries across a renewal. Every rotation
+        // costs the user an admin-password prompt. At 365 days that was one
+        // forced re-approval per user per year, arriving without warning as a
+        // TLS error mid-task, in exchange for very little: this root never
+        // leaves the machine, and anyone able to read ~/.lumen/ca.key (0600)
+        // already has the account and could install their own root anyway. The
+        // answer to a compromised key is deleting it, not waiting out a year.
+        //
+        // This also matches what earlier builds issued — CAs minted in 2024 run
+        // to 2034 — so long-lived local roots are the behaviour this codebase
+        // already had in the field and users are already relying on.
         let now = chrono::Utc::now();
         let not_before = now - chrono::Duration::hours(1); // small backdate for clock skew
-        let not_after = now + chrono::Duration::days(365);
+        let not_after = now + chrono::Duration::days(3650);
         params.not_before = rcgen::date_time_ymd(
             not_before.format("%Y").to_string().parse().unwrap_or(2026),
             not_before.format("%m").to_string().parse().unwrap_or(1),
@@ -462,11 +475,14 @@ mod tests {
     fn test_expires_within_reads_the_certificate() {
         let ca = LumenCA::generate().expect("generate");
 
-        // Freshly minted: a year out, so not inside a 30-day window.
+        // Freshly minted: a decade out, so well outside the rotation window.
         assert_eq!(ca.expires_within(std::time::Duration::from_secs(30 * 86_400)), Some(false));
 
-        // ...but inside a 400-day one, which brackets its notAfter.
-        assert_eq!(ca.expires_within(std::time::Duration::from_secs(400 * 86_400)), Some(true));
+        // ...but inside a window that brackets its notAfter.
+        assert_eq!(
+            ca.expires_within(std::time::Duration::from_secs(3700 * 86_400)),
+            Some(true)
+        );
     }
 
     #[test]
