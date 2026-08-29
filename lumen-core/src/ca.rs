@@ -9,6 +9,11 @@ const CA_DIR: &str = ".lumen";
 const CA_CERT_FILE: &str = "ca.pem";
 const CA_KEY_FILE: &str = "ca-key.pem";
 
+/// Rotate the CA this long before its `notAfter`. A month is comfortably longer
+/// than any plausible gap between daemon restarts, so the rotation happens while
+/// the old certificate still works rather than after it has already broken.
+const REGEN_BEFORE_EXPIRY: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+
 pub struct LumenCA {
     pub cert_pem: String,
     pub key_pem: String,
@@ -27,19 +32,42 @@ impl LumenCA {
         let key_path = dir.join(CA_KEY_FILE);
 
         if cert_path.exists() && key_path.exists() {
-            let needs_regen = cert_path
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|mtime| mtime.elapsed().ok())
-                .map(|age| age.as_secs() > 364 * 24 * 3600)
-                .unwrap_or(false);
+            let existing = Self::load(&cert_path, &key_path);
 
-            if !needs_regen {
-                info!("Loading existing CA from {}", dir.display());
-                return Self::load(&cert_path, &key_path);
+            // Ask the CERTIFICATE when it expires, not the filesystem.
+            //
+            // This used to read the file's mtime and assume "modified < 364 days
+            // ago" meant "still valid", which is a different fact and routinely a
+            // false one. Restoring ~/.lumen from a backup, copying it to a new Mac,
+            // or any tool that rewrites the file gives a year-old certificate a
+            // fresh mtime — so the check passed, the expired CA was loaded, and
+            // every proxied request failed with ERR_CERT_DATE_INVALID while Lumen
+            // reported itself healthy. It also failed OPEN: an unreadable mtime, or
+            // one in the future from clock skew, resolved to "not stale".
+            match existing {
+                Ok(ca) => {
+                    match ca.expires_within(REGEN_BEFORE_EXPIRY) {
+                        // Parse failure is deliberately NOT a reason to regenerate:
+                        // discarding a working CA (and its trust) over a parser
+                        // quirk is worse than the staleness it would avoid.
+                        None | Some(false) => {
+                            info!("Loading existing CA from {}", dir.display());
+                            return Ok(ca);
+                        }
+                        Some(true) => {
+                            warn!(
+                                "CA certificate at {} is expired or within {} days of it — \
+                                 regenerating. You will need to re-trust the new certificate.",
+                                cert_path.display(),
+                                REGEN_BEFORE_EXPIRY.as_secs() / 86_400
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Existing CA at {} is unreadable ({e}) — regenerating.", dir.display());
+                }
             }
-            warn!("CA certificate is nearing expiry — regenerating. You will need to re-trust the new cert.");
         }
 
         info!("Generating new CA in {}", dir.display());
@@ -56,6 +84,32 @@ impl LumenCA {
 
         info!("CA certificate written to {}", cert_path.display());
         Ok(ca)
+    }
+
+    /// Is this CA already expired, or close enough that it will expire before a
+    /// user plausibly restarts the daemon again?
+    ///
+    /// `None` when the certificate cannot be parsed — the caller treats that as
+    /// "keep using it", since a working CA is worth more than a speculative
+    /// rotation that costs the user their keychain trust.
+    pub fn expires_within(&self, window: std::time::Duration) -> Option<bool> {
+        use x509_parser::prelude::*;
+
+        let (_, pem) = parse_x509_pem(self.cert_pem.as_bytes()).ok()?;
+        let (_, cert) = parse_x509_certificate(&pem.contents).ok()?;
+
+        let not_after = cert.validity().not_after.timestamp();
+        if not_after < 0 {
+            return None;
+        }
+
+        let deadline = std::time::SystemTime::now() + window;
+        let deadline_secs = deadline
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+
+        Some((not_after as u64) <= deadline_secs)
     }
 
     fn generate() -> Result<Self> {
@@ -261,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_load_or_generate_uses_tempdir() {
-        let _guard = HOME_MUTEX.lock().unwrap();
+        let _guard = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", dir.path());
@@ -281,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_load_or_generate_skips_regen_for_fresh_cert() {
-        let _guard = HOME_MUTEX.lock().unwrap();
+        let _guard = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", dir.path());
@@ -300,24 +354,28 @@ mod tests {
         assert_eq!(ca1.cert_pem, ca2.cert_pem);
     }
 
+    /// The reported failure, as a test: an EXPIRED certificate whose file looks
+    /// freshly modified must still be replaced.
+    ///
+    /// This is the shape a restored backup or a copy onto a new Mac produces —
+    /// `cp` and Time Machine both stamp a new mtime on a year-old certificate.
+    /// The old check read that mtime, concluded the CA was current, loaded it,
+    /// and every proxied request then failed with ERR_CERT_DATE_INVALID while
+    /// Lumen reported itself healthy.
     #[test]
-    fn test_load_or_generate_regenerates_old_cert() {
-        use std::time::{Duration, SystemTime};
-        let _guard = HOME_MUTEX.lock().unwrap();
+    fn test_regenerates_expired_cert_even_with_fresh_mtime() {
+        let _guard = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", dir.path());
 
-        // Generate a fresh CA first.
         let ca1 = LumenCA::load_or_generate().expect("first generate");
 
-        // Back-date the cert file mtime to 366 days ago.
-        let ca_path = dir.path().join(".lumen").join("ca.pem");
-        let old_mtime = SystemTime::now() - Duration::from_secs(366 * 24 * 3600);
-        filetime::set_file_mtime(&ca_path, filetime::FileTime::from_system_time(old_mtime))
-            .expect("set mtime");
+        // An expired CA on disk, written now — so its mtime is as fresh as it gets.
+        let ca_dir = dir.path().join(".lumen");
+        let expired = expired_ca_pem();
+        std::fs::write(ca_dir.join("ca.pem"), &expired).expect("write expired cert");
 
-        // Next call should regenerate because mtime is >364 days old.
         let ca2 = LumenCA::load_or_generate().expect("regen");
 
         match original_home {
@@ -325,9 +383,46 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
 
-        assert_ne!(
-            ca1.cert_pem, ca2.cert_pem,
-            "CA should be regenerated when near expiry"
-        );
+        assert_ne!(ca2.cert_pem, expired, "an expired CA must not be loaded");
+        assert_ne!(ca1.cert_pem, ca2.cert_pem, "a new CA should have been issued");
+    }
+
+    #[test]
+    fn test_expires_within_reads_the_certificate() {
+        let ca = LumenCA::generate().expect("generate");
+
+        // Freshly minted: a year out, so not inside a 30-day window.
+        assert_eq!(ca.expires_within(std::time::Duration::from_secs(30 * 86_400)), Some(false));
+
+        // ...but inside a 400-day one, which brackets its notAfter.
+        assert_eq!(ca.expires_within(std::time::Duration::from_secs(400 * 86_400)), Some(true));
+    }
+
+    #[test]
+    fn test_expires_within_is_none_for_unparseable_pem() {
+        // Deliberately not `Some(true)`: a parser failure must never be the
+        // reason a working CA is thrown away along with the user's trust.
+        let mut ca = LumenCA::generate().expect("generate");
+        ca.cert_pem =
+            "-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n"
+                .to_string();
+
+        assert_eq!(ca.expires_within(std::time::Duration::from_secs(86_400)), None);
+    }
+
+    /// A syntactically valid CA whose validity window closed in 2021.
+    fn expired_ca_pem() -> String {
+        use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+
+        let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+        let mut params = CertificateParams::default();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "Lumen Local CA");
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2021, 1, 1);
+
+        params.self_signed(&key_pair).expect("self sign").pem()
     }
 }
