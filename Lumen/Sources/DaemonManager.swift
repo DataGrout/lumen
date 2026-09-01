@@ -5,6 +5,25 @@ final class DaemonManager {
     private var intentionalStop = false
     private let apiPort: Int
 
+    /// Consecutive non-zero exits. A daemon that cannot start at all used to
+    /// restart every two seconds forever with its output discarded, so the app
+    /// showed "not running" and the Restart button appeared to do nothing —
+    /// it was working, and failing again, invisibly.
+    private var consecutiveFailures = 0
+
+    /// Why the daemon last exited, if it exited badly. Surfaced in the UI so a
+    /// user can say what went wrong instead of only that nothing happened.
+    private(set) var lastFailureReason: String?
+
+    /// Where the daemon's output goes. Previously /dev/null, which meant a
+    /// start-up failure left no record anywhere on the machine.
+    static var logURL: URL {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".lumen")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("daemon.log")
+    }
+
     var isRunning: Bool {
         if process?.isRunning == true {
             return true
@@ -53,34 +72,93 @@ final class DaemonManager {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
         proc.environment = ProcessInfo.processInfo.environment
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
+
+        // Keep the daemon's output. It is the only account of why a start failed,
+        // and discarding it is why an Intel tester could report nothing beyond
+        // "it never starts". Truncated each launch so it stays a diagnosis of the
+        // current attempt rather than an unbounded file.
+        let logURL = Self.logURL
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            proc.standardOutput = handle
+            proc.standardError = handle
+        } else {
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+        }
 
         proc.terminationHandler = { [weak self] p in
             guard let self = self else { return }
-            NSLog("[Lumen] lumen-core exited with code %d", p.terminationStatus)
+
+            let tail = Self.recentLog()
+            NSLog("[Lumen] lumen-core exited with code %d. Output: %@", p.terminationStatus, tail)
 
             // Safety: disable system proxy if daemon crashes unexpectedly
             if !self.intentionalStop && p.terminationStatus != 0 {
+                self.consecutiveFailures += 1
+                self.lastFailureReason = tail.isEmpty
+                    ? "exited with code \(p.terminationStatus) and produced no output"
+                    : tail
+
                 let iface = SystemProxy.activeInterface()
                 if SystemProxy.isEnabled(interface: iface) {
                     NSLog("[Lumen] Daemon crashed — disabling system proxy for safety")
                     Self.disableProxySync(interface: iface)
                 }
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                // Back off, and stop after a few tries. A daemon that cannot start
+                // will not start on the fourth attempt either, and retrying every
+                // two seconds forever hid the failure rather than recovering from
+                // it — the log below is the point of stopping.
+                if self.consecutiveFailures >= 4 {
+                    NSLog(
+                        "[Lumen] lumen-core failed %d times, giving up. See %@",
+                        self.consecutiveFailures, Self.logURL.path
+                    )
+                    return
+                }
+
+                let delay = Double(self.consecutiveFailures) * 2.0
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     self.start()
                 }
+            } else {
+                self.consecutiveFailures = 0
             }
         }
 
         do {
             try proc.run()
             process = proc
+            lastFailureReason = nil
             NSLog("[Lumen] lumen-core started (pid %d)", proc.processIdentifier)
         } catch {
+            // `proc.run()` throwing is a different failure from the daemon exiting:
+            // the binary could not be executed at all (permissions, quarantine, a
+            // missing slice). Recording it distinctly is what tells those apart.
+            lastFailureReason = "could not execute \(binaryPath): \(error.localizedDescription)"
+            consecutiveFailures += 1
             NSLog("[Lumen] Failed to start lumen-core: %@", error.localizedDescription)
         }
+    }
+
+    /// The tail of the daemon's output, for reporting a failed start.
+    static func recentLog(maxLines: Int = 12) -> String {
+        guard let data = try? Data(contentsOf: logURL),
+              let text = String(data: data, encoding: .utf8) else { return "" }
+
+        return text
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .suffix(maxLines)
+            .joined(separator: "\n")
+    }
+
+    /// Clear the failure state so the user's explicit Restart is a real retry
+    /// rather than one more attempt against an exhausted budget.
+    func resetFailures() {
+        consecutiveFailures = 0
+        lastFailureReason = nil
     }
 
     func stop() {

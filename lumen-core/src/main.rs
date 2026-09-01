@@ -59,6 +59,19 @@ compile_error!(
      `crypto-ring` (default) or `crypto-aws-lc`"
 );
 
+/// `~/.lumen/daemon.log`, truncated, or `None` when it cannot be opened.
+fn daemon_log_file() -> Option<std::fs::File> {
+    let dir = crate::state::home_dir()?.join(".lumen");
+    std::fs::create_dir_all(&dir).ok()?;
+
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(dir.join("daemon.log"))
+        .ok()
+}
+
 #[tokio::main]
 async fn main() {
     install_crypto_provider();
@@ -66,7 +79,34 @@ async fn main() {
     // RUST_LOG takes full control when set; otherwise default to info for lumen_core.
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("lumen_core=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Log to ~/.lumen/daemon.log as well as stdout.
+    //
+    // The macOS app redirects the daemon's stdout to this file
+    // (DaemonManager.logURL), which is what lets a "it never starts" report be
+    // diagnosed at all. Windows has no such app: the binary is launched with no
+    // redirection, so a start-up failure there left no record anywhere on the
+    // machine — the exact situation that file exists to end.
+    //
+    // Putting the appender in the DAEMON gives both platforms the same file, and
+    // makes the Swift-side redirect redundant rather than special.
+    //
+    // Truncated per launch, matching the macOS behaviour: the question is always
+    // "why did THIS attempt fail", and an append-forever file buries it under
+    // previous runs.
+    match daemon_log_file() {
+        Some(file) => {
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_writer(file)
+                .with_ansi(false)
+                .init();
+        }
+        None => {
+            // A home directory we cannot resolve or write to must not stop the
+            // daemon starting — logging is diagnostics, not a dependency.
+            tracing_subscriber::fmt().with_env_filter(filter).init();
+        }
+    }
 
     let args: Vec<String> = std::env::args().collect();
     let api_port = parse_port_arg(&args, "--api-port", 9091);

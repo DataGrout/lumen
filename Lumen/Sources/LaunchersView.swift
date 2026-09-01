@@ -266,7 +266,7 @@ struct LaunchersView: View {
                 .font(.system(size: 9))
                 .foregroundStyle(.white.opacity(0.55))
             Spacer()
-            Button(action: { daemonManager.start() }) {
+            Button(action: { daemonManager.resetFailures(); daemonManager.start() }) {
                 Text("Restart")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.red.opacity(0.9))

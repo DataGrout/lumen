@@ -113,17 +113,53 @@ enum LauncherSupport {
     }
 
     /// Spawn a proxy-mode GUI app with HTTPS_PROXY + NODE_EXTRA_CA_CERTS set.
+    /// Launch a GUI app through LaunchServices rather than as a child process.
+    ///
+    /// `Process` made the launched app our direct child, and when Lumen is started from
+    /// a terminal (`sh run.sh`) that put it in the terminal's foreground process group.
+    /// Ctrl+C signals the whole group, so Claude Desktop — which installs no SIGINT
+    /// handler — died before Lumen did. Someone stopping the proxy lost their editor,
+    /// and it took a second Ctrl+C to stop the thing they were aiming at.
+    ///
+    /// `openApplication` hands the launch to LaunchServices, so the app is not our
+    /// descendant and our process group's signals cannot reach it. It is also the
+    /// correct API for activating a macOS app, which `Process` never was.
+    ///
+    /// `createsNewApplicationInstance` keeps the old behaviour: the point of launching
+    /// from here is to get an instance that has the proxy environment, and activating an
+    /// already-running instance would silently attach to one that does not.
     static func spawnProxyApp(binary: String, port: Int, caPath: String) {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = ["--proxy-server=http://127.0.0.1:\(port)"]
+        // LaunchServices wants the .app bundle, not the executable inside it.
+        let bundleURL = appBundleURL(forExecutable: binary)
+
         var env = ProcessInfo.processInfo.environment
         env["HTTPS_PROXY"] = "http://127.0.0.1:\(port)"
         env["HTTP_PROXY"]  = "http://127.0.0.1:\(port)"
         env["NODE_EXTRA_CA_CERTS"] = caPath
-        proc.environment = env
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        try? proc.run()
+
+        let config = NSWorkspace.OpenConfiguration()
+        config.arguments = ["--proxy-server=http://127.0.0.1:\(port)"]
+        config.environment = env
+        config.createsNewApplicationInstance = true
+
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, error in
+            if let error {
+                NSLog("[lumen] failed to launch \(bundleURL.lastPathComponent): \(error)")
+            }
+        }
+    }
+
+    /// `/Applications/Claude.app/Contents/MacOS/Claude` -> `/Applications/Claude.app`.
+    ///
+    /// Walks up rather than string-trimming a fixed depth, so it survives a bundle whose
+    /// executable sits at a different path.
+    static func appBundleURL(forExecutable binary: String) -> URL {
+        var url = URL(fileURLWithPath: binary)
+
+        while url.pathExtension != "app", url.pathComponents.count > 1 {
+            url = url.deletingLastPathComponent()
+        }
+
+        return url.pathExtension == "app" ? url : URL(fileURLWithPath: binary)
     }
 }

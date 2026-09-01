@@ -363,9 +363,20 @@ struct PopoverView: View {
     private var captureBanner: some View {
         let (icon, message, detail, color): (String, String, String, Color) = {
             if !apiClient.connected {
+                // Say WHY when the daemon told us. "Traffic is not being
+                // captured" is the consequence, not the cause, and a user with a
+                // daemon that will not start had nothing else to report.
+                let why = daemonManager.lastFailureReason.map { reason -> String in
+                    let firstLine = reason
+                        .split(separator: "\n")
+                        .first
+                        .map(String.init) ?? reason
+                    return String(firstLine.prefix(90))
+                }
+
                 return ("exclamationmark.triangle.fill",
                         "Daemon not running",
-                        "Traffic is not being captured",
+                        why ?? "Traffic is not being captured",
                         .red)
             } else {
                 return ("pause.circle.fill",
@@ -393,6 +404,10 @@ struct PopoverView: View {
 
             if !apiClient.connected {
                 Button(action: {
+                    // Clear the retry budget first: after repeated failures the
+                    // automatic restarts stop, and without this an explicit
+                    // Restart would silently do nothing at all.
+                    daemonManager.resetFailures()
                     daemonManager.start()
                     // Poll immediately after restart attempt so UI responds quickly
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { apiClient.pollNow() }
