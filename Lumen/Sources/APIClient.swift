@@ -325,16 +325,12 @@ final class APIClient {
     /// effectively bounded to one subprocess spawn per call.
     func refreshCATrust() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let proc = Process()
-            let pipe = Pipe()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-            proc.arguments = ["dump-trust-settings"]
-            proc.standardOutput = pipe
-            proc.standardError = Pipe()
-            try? proc.run()
-            proc.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) ?? ""
+            // Through `Shell.capture`: a trust dump is easily larger than a pipe
+            // buffer, and reading it only after `waitUntilExit()` wedged the
+            // subprocess permanently — every five seconds, forever, with
+            // `caTrusted` frozen at whatever it last managed to read.
+            let out = Shell.capture(executable: "/usr/bin/security",
+                                    arguments: ["dump-trust-settings"])
             let trusted = out.localizedCaseInsensitiveContains("Lumen Local CA")
             DispatchQueue.main.async {
                 self?.caTrusted = trusted

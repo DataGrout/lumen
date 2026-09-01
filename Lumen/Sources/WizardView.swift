@@ -609,17 +609,13 @@ struct WizardView: View {
         }
         guard let first = tool.binaryPaths.first else { return false }
         let name = (first as NSString).lastPathComponent
-        let proc = Process()
-        let pipe = Pipe()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        proc.arguments = [name]
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        try? proc.run()
-        proc.waitUntilExit()
-        guard proc.terminationStatus == 0 else { return false }
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        // `which` output is tiny, so this one never actually deadlocked — routed
+        // through `Shell.capture` anyway so no copy of the read-after-wait shape
+        // survives to be pattern-matched by the next person.
+        let out = Shell.capture(executable: "/usr/bin/which", arguments: [name])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
         return !out.isEmpty
     }
 
@@ -976,16 +972,8 @@ struct WizardView: View {
             // dump-trust-settings checks the actual trust database, not just cert
             // existence — avoids false-positives from iCloud keychain entries that
             // were imported without trust settings.
-            let proc = Process()
-            let pipe = Pipe()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-            proc.arguments = ["dump-trust-settings"]
-            proc.standardOutput = pipe
-            proc.standardError  = Pipe()
-            try? proc.run()
-            proc.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) ?? ""
+            let out = Shell.capture(executable: "/usr/bin/security",
+                                    arguments: ["dump-trust-settings"])
             let trusted = out.localizedCaseInsensitiveContains("Lumen Local CA")
             DispatchQueue.main.async { caTrusted = trusted }
         }

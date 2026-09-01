@@ -380,21 +380,39 @@ struct SettingsView: View {
             settingRow("Interface", value: activeInterface)
             toggleRow("System Proxy", isOn: systemProxyEnabled) { val in
                 Task {
+                    let port = apiClient.proxyConfig.port
+
                     if val {
-                        let ok = await SystemProxy.enable(port: apiClient.proxyConfig.port, interface: activeInterface)
+                        let iface = await SystemProxy.reconcile(port: port)
+                        let ok = SystemProxy.isOurProxy(on: iface, port: port)
                         await MainActor.run {
                             systemProxyEnabled = ok
                             if ok {
                                 UserDefaults.standard.set(true, forKey: "lumen.autoEnableProxy")
-                                UserDefaults.standard.set(apiClient.proxyConfig.port, forKey: "lumen.proxyPort")
+                                UserDefaults.standard.set(port, forKey: "lumen.proxyPort")
+                                // Taking over the system proxy means committing to
+                                // being here after a reboot to serve it.
+                                SystemProxy.syncLoginItem(managesProxy: true)
                             }
                         }
                     } else {
-                        let ok = await SystemProxy.disable(interface: activeInterface)
+                        // Every service, not just the active one: switching networks
+                        // while enabled can leave our setting on a service the user
+                        // is no longer on, and turning the feature "off" has to mean
+                        // off everywhere or it strands them later.
+                        let cleared = await SystemProxy.disableOurProxyEverywhere(port: port)
+                        let stillSet = SystemProxy.allServices().contains {
+                            SystemProxy.isOurProxy(on: $0, port: port)
+                        }
                         await MainActor.run {
-                            systemProxyEnabled = !ok
-                            if ok {
+                            systemProxyEnabled = stillSet
+                            if !stillSet {
                                 UserDefaults.standard.set(false, forKey: "lumen.autoEnableProxy")
+                                SystemProxy.syncLoginItem(managesProxy: false)
+                                if !cleared.isEmpty {
+                                    NSLog("[Lumen] Cleared system proxy from: %@",
+                                          cleared.joined(separator: ", "))
+                                }
                             }
                         }
                     }

@@ -20,12 +20,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var wizardWindow: NSWindow?
     /// Global mouse-down monitor used to dismiss the popover when clicking outside.
     private var clickOutsideMonitor: Any?
+    /// Keeps the system proxy pointed at whichever service macOS is actually routing
+    /// through — see `startProxyWatchdog(port:)`.
+    private var proxyWatchdog: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
         daemonManager = DaemonManager()
         daemonManager.start()
+
+        // Before anything else touches the network: if we manage the system proxy
+        // we must be able to start ourselves, or a reboot strands the machine.
+        SystemProxy.syncLoginItem(
+            managesProxy: UserDefaults.standard.bool(forKey: "lumen.autoEnableProxy")
+        )
 
         DispatchQueue.global(qos: .background).async { [weak self] in
             let healthy = self?.daemonManager.waitForHealthy(timeout: 5.0) ?? false
@@ -34,10 +43,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard healthy, UserDefaults.standard.bool(forKey: "lumen.autoEnableProxy") else { return }
             let savedPort = UserDefaults.standard.integer(forKey: "lumen.proxyPort")
             let port = savedPort > 0 ? savedPort : 9090
-            let iface = SystemProxy.activeInterface()
-            Task {
-                let ok = await SystemProxy.enable(port: port, interface: iface)
-                NSLog("[Lumen] Auto-restored system proxy on port %d: %@", port, ok ? "ok" : "failed")
+            Task { [weak self] in
+                // Reconcile rather than enable: this also clears our proxy off any
+                // service that is no longer primary, so a switch between Wi-Fi,
+                // ethernet and hotspot cannot leave dead settings behind.
+                let iface = await SystemProxy.reconcile(port: port)
+                let ok = SystemProxy.isOurProxy(on: iface, port: port)
+                NSLog(
+                    "[Lumen] Auto-restored system proxy on %@ port %d: %@",
+                    iface,
+                    port,
+                    ok ? "ok" : "failed"
+                )
+                await MainActor.run { self?.startProxyWatchdog(port: port) }
             }
         }
 
@@ -107,27 +125,90 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         wizardWindow = window
     }
 
+    /// Keep the proxy on whichever service macOS is actually routing through.
+    ///
+    /// Setting it once at launch is only correct until the primary service
+    /// changes: plug in an ethernet dongle, raise a VPN, or roam, and macOS
+    /// routes through a service that carries no proxy — the app keeps running,
+    /// `networksetup` still reports the proxy "enabled" on the OLD service, and
+    /// capture silently stops. Reported exactly that way: traffic simply ended
+    /// mid-afternoon with everything apparently configured.
+    private func startProxyWatchdog(port: Int) {
+        proxyWatchdog?.invalidate()
+
+        proxyWatchdog = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: true) { _ in
+            guard UserDefaults.standard.bool(forKey: "lumen.autoEnableProxy") else { return }
+
+            // Off the main thread, always.
+            //
+            // A Timer fires on the runloop it was scheduled on — here, the main
+            // one — and `activeInterface()` / `isOurProxy()` each spawn
+            // `networksetup` and wait for it. That is three subprocesses of
+            // main-thread stall every twenty seconds at best; at worst the tool
+            // wedged and the app beach-balled permanently while the daemon kept
+            // capturing (2026-08-21: four hours blocked in `waitUntilExit`).
+            // Nothing here touches UI, so nothing here belongs on the main thread.
+            DispatchQueue.global(qos: .utility).async {
+                let iface = SystemProxy.activeInterface()
+                let onPrimary = SystemProxy.isOurProxy(on: iface, port: port)
+
+                // Reconcile even when the primary already has it: the point is not
+                // only "is the current service covered" but "is any OTHER service
+                // still carrying a setting we would leave behind".
+                let stale = SystemProxy.allServices().contains {
+                    $0 != iface && SystemProxy.isOurProxy(on: $0, port: port)
+                }
+                guard !onPrimary || stale else { return }
+
+                if !onPrimary {
+                    NSLog("[Lumen] Primary service changed to %@ without our proxy — re-applying", iface)
+                }
+
+                Task {
+                    let applied = await SystemProxy.reconcile(port: port)
+                    NSLog("[Lumen] System proxy reconciled onto %@", applied)
+                }
+            }
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        disableSystemProxyIfActive()
+        proxyWatchdog?.invalidate()
+        proxyWatchdog = nil
+        disableSystemProxyEverywhere()
         daemonManager.stop()
     }
 
-    private func disableSystemProxyIfActive() {
-        let iface = SystemProxy.activeInterface()
-        if SystemProxy.isEnabled(interface: iface) {
-            NSLog("[Lumen] Disabling system proxy on quit")
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/sbin/networksetup")
-            proc.arguments = ["-setwebproxystate", iface, "off"]
-            try? proc.run()
-            proc.waitUntilExit()
+    /// Clear our proxy from EVERY service before quitting, not just the primary.
+    ///
+    /// Clearing only the active service leaks: set the proxy on Wi-Fi, plug in
+    /// ethernet, quit, and Wi-Fi is left aimed at a dead port. Every app that
+    /// honours the system proxy then has no internet, with link, DHCP and DNS all
+    /// healthy — a failure that looks like anything except us.
+    ///
+    /// Synchronous on purpose. `applicationWillTerminate` returns into process
+    /// exit, so work dispatched elsewhere is not guaranteed to run, and leaving
+    /// the machine unable to reach the internet is the one outcome worth blocking
+    /// termination for. Bounded by `Shell.capture`'s timeout per call.
+    private func disableSystemProxyEverywhere() {
+        let port = proxyPortSetting()
 
-            let proc2 = Process()
-            proc2.executableURL = URL(fileURLWithPath: "/usr/sbin/networksetup")
-            proc2.arguments = ["-setsecurewebproxystate", iface, "off"]
-            try? proc2.run()
-            proc2.waitUntilExit()
+        for service in SystemProxy.allServices()
+        where SystemProxy.isOurProxy(on: service, port: port) {
+            NSLog("[Lumen] Clearing our system proxy from %@ on quit", service)
+            for flag in ["-setwebproxystate", "-setsecurewebproxystate"] {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/sbin/networksetup")
+                proc.arguments = [flag, service, "off"]
+                try? proc.run()
+                proc.waitUntilExit()
+            }
         }
+    }
+
+    private func proxyPortSetting() -> Int {
+        let saved = UserDefaults.standard.integer(forKey: "lumen.proxyPort")
+        return saved > 0 ? saved : 9090
     }
 
     // MARK: - NSWindowDelegate
