@@ -414,6 +414,7 @@ mod tests {
             total_tokens: 150,
             cache_read_tokens: Some(10),
             cache_creation_tokens: None,
+            fast: false,
         };
 
         aggregator.record_usage(
@@ -482,6 +483,7 @@ mod tests {
             total_tokens: 15,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            fast: false,
         };
         aggregator.record_usage(
             crate::parser::LLMProvider::OpenAI,

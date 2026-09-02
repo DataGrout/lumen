@@ -24,6 +24,12 @@ pub struct PricingEntry {
     pub output_per_mtok: f64,
     pub cache_read_per_mtok: Option<f64>,
     pub cache_write_per_mtok: Option<f64>,
+    /// Premium rates for `speed: "fast"`, where the model has them. Absent for all
+    /// but Opus 5 and Opus 4.8.
+    #[serde(default)]
+    pub fast_input_per_mtok: Option<f64>,
+    #[serde(default)]
+    pub fast_output_per_mtok: Option<f64>,
     // Informational only — key into the top-level "notes" map if present.
     #[allow(dead_code)]
     pub note: Option<String>,
@@ -37,6 +43,55 @@ pub struct ModelPricing {
     pub output_per_mtok: f64,
     pub cache_read_per_mtok: Option<f64>,
     pub cache_write_per_mtok: Option<f64>,
+    /// Fast-mode base rates, where the model offers fast mode at a premium.
+    ///
+    /// Kept on the model rather than as a separate `claude-opus-5:fast` row on
+    /// purpose: the id the API reports is `claude-opus-5` either way, so a separate
+    /// row would need a synthetic name that fuzzy matching could bleed into (there
+    /// is a test guarding exactly that class of bug for the gpt-5 family). Cache
+    /// rates are derived from this base rather than stored — see `speed_rates`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_input_per_mtok: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_output_per_mtok: Option<f64>,
+}
+
+/// Prompt-cache multipliers, relative to whichever base input rate applies.
+///
+/// Anthropic documents these as stacking on top of fast-mode pricing, so a fast
+/// Opus 5 cache read is 0.1x of $10, not 0.1x of $5.
+const CACHE_READ_MULTIPLIER: f64 = 0.1;
+const CACHE_WRITE_MULTIPLIER: f64 = 1.25;
+
+impl ModelPricing {
+    /// The four rates that apply at the requested speed: input, output, cache read,
+    /// cache write.
+    ///
+    /// A fast request on a model with no fast rate falls back to standard rather
+    /// than erroring, which is what the provider does: Opus 4.6 accepts
+    /// `speed: "fast"` and bills at standard rates. Opus 4.7 rejects the parameter
+    /// outright, so no usage reaches us to price.
+    fn rates(&self, fast: bool) -> (f64, f64, f64, f64) {
+        match (fast, self.fast_input_per_mtok, self.fast_output_per_mtok) {
+            (true, Some(fast_in), Some(fast_out)) => (
+                fast_in,
+                fast_out,
+                // Derived, not stored: the cache multipliers stack on whichever base
+                // applies, so one number to maintain instead of three that can drift.
+                fast_in * CACHE_READ_MULTIPLIER,
+                fast_in * CACHE_WRITE_MULTIPLIER,
+            ),
+            _ => (
+                self.input_per_mtok,
+                self.output_per_mtok,
+                // Absent cache rates keep their historical meaning — full input rate
+                // for a read, 1.25x for a write — rather than adopting the multiplier.
+                self.cache_read_per_mtok.unwrap_or(self.input_per_mtok),
+                self.cache_write_per_mtok
+                    .unwrap_or(self.input_per_mtok * CACHE_WRITE_MULTIPLIER),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +278,13 @@ impl PricingDatabase {
             Some(1.00),
             Some(12.50),
         );
+
+        // Fast mode: a premium tier on Opus 5 and Opus 4.8 only, at $10/$50 against
+        // their standard $5/$25. Same model id on the wire, so the request's
+        // `speed` field is the only thing that distinguishes them.
+        db.set_fast("anthropic", "claude-opus-5", 10.00, 50.00);
+        db.set_fast("anthropic", "claude-opus-4-8", 10.00, 50.00);
+        db.set_fast("anthropic", "claude-opus-4-8-20260528", 10.00, 50.00);
 
         // Fable 5.1 / Mythos 5.1 (2026-09). Same $10/$50 base and the same cache
         // WRITE rates as 5.0 — but cache READS are 0.025x base rather than the 0.1x
@@ -512,6 +574,13 @@ impl PricingDatabase {
                 e.cache_read_per_mtok,
                 e.cache_write_per_mtok,
             );
+            // `add` cannot carry the fast tier (it would mean two more arguments on
+            // every one of a hundred call sites), so apply it after. Omitting this
+            // step is invisible in the compiled defaults and silently wrong at
+            // runtime, because the daemon prices from this file.
+            if let (Some(fi), Some(fo)) = (e.fast_input_per_mtok, e.fast_output_per_mtok) {
+                db.set_fast(&e.provider, &e.model, fi, fo);
+            }
         }
         tracing::info!(
             "Loaded {} model pricing entries from JSON (updated {})",
@@ -540,10 +609,26 @@ impl PricingDatabase {
                 output_per_mtok: output,
                 cache_read_per_mtok: cache_read,
                 cache_write_per_mtok: cache_write,
+                fast_input_per_mtok: None,
+                fast_output_per_mtok: None,
             },
         );
     }
 
+    /// Record the premium rates a model charges under `speed: "fast"`.
+    ///
+    /// Separate from `add` because exactly two models have them, and threading two
+    /// more `None`s through ninety-nine other call sites would bury the exception.
+    fn set_fast(&mut self, provider: &str, model: &str, input: f64, output: f64) {
+        if let Some(entry) = self.models.get_mut(&format!("{}:{}", provider, model)) {
+            entry.fast_input_per_mtok = Some(input);
+            entry.fast_output_per_mtok = Some(output);
+        }
+    }
+
+    /// Standard-speed cost. Kept as the plain spelling for the overwhelmingly common
+    /// case; the aggregator calls the `_with_speed` form because it has the flag.
+    #[allow(dead_code)]
     pub fn calculate_cost(
         &self,
         provider: LLMProvider,
@@ -552,6 +637,33 @@ impl PricingDatabase {
         output_tokens: u64,
         cache_read_tokens: Option<u64>,
         cache_creation_tokens: Option<u64>,
+    ) -> CostBreakdown {
+        self.calculate_cost_with_speed(
+            provider,
+            model,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            false,
+        )
+    }
+
+    /// As `calculate_cost`, for a request that asked for `speed: "fast"`.
+    ///
+    /// Fast mode is a premium tier on Opus 5 and Opus 4.8 — $10/$50 against the
+    /// standard $5/$25 — and the API reports the same model id either way. Every
+    /// fast-mode request was therefore priced at half until this existed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn calculate_cost_with_speed(
+        &self,
+        provider: LLMProvider,
+        model: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: Option<u64>,
+        cache_creation_tokens: Option<u64>,
+        fast: bool,
     ) -> CostBreakdown {
         let provider_str = provider.to_string();
 
@@ -580,6 +692,11 @@ impl PricingDatabase {
         };
 
         if let Some(pricing) = pricing {
+            // Every rate below comes from here, so fast mode cannot be applied to the
+            // base rates and forgotten on the cache lines — which is most of the spend.
+            let (input_rate, output_rate, cache_read_rate, cache_write_rate) =
+                pricing.rates(fast);
+
             let cache_read = cache_read_tokens.unwrap_or(0);
             let cache_create = cache_creation_tokens.unwrap_or(0);
             // Normal input excludes cache-read and cache-creation tokens (billed separately)
@@ -587,28 +704,15 @@ impl PricingDatabase {
                 .saturating_sub(cache_read)
                 .saturating_sub(cache_create);
 
-            let input_cost = (normal_input as f64 / 1_000_000.0) * pricing.input_per_mtok;
-            let output_cost = (output_tokens as f64 / 1_000_000.0) * pricing.output_per_mtok;
+            let input_cost = (normal_input as f64 / 1_000_000.0) * input_rate;
+            let output_cost = (output_tokens as f64 / 1_000_000.0) * output_rate;
+            let cache_read_cost = (cache_read as f64 / 1_000_000.0) * cache_read_rate;
+            let cache_create_cost = (cache_create as f64 / 1_000_000.0) * cache_write_rate;
 
-            let cache_read_cost = if let Some(rate) = pricing.cache_read_per_mtok {
-                (cache_read as f64 / 1_000_000.0) * rate
-            } else {
-                (cache_read as f64 / 1_000_000.0) * pricing.input_per_mtok
-            };
-
-            // Cache creation costs 25% more than base input (or use explicit rate)
-            let cache_create_cost = if let Some(rate) = pricing.cache_write_per_mtok {
-                (cache_create as f64 / 1_000_000.0) * rate
-            } else {
-                (cache_create as f64 / 1_000_000.0) * pricing.input_per_mtok * 1.25
-            };
-
-            // Savings = what cache_read tokens would have cost at full rate minus what they actually cost
-            let cache_read_savings = (cache_read as f64 / 1_000_000.0)
-                * (pricing.input_per_mtok
-                    - pricing
-                        .cache_read_per_mtok
-                        .unwrap_or(pricing.input_per_mtok));
+            // Savings = what cache_read tokens would have cost at full rate minus what
+            // they actually cost, both at the rate that applied.
+            let cache_read_savings =
+                (cache_read as f64 / 1_000_000.0) * (input_rate - cache_read_rate);
 
             CostBreakdown {
                 input_cost: input_cost + cache_read_cost + cache_create_cost,
@@ -983,6 +1087,82 @@ mod tests {
     }
 
     #[test]
+    fn test_fast_mode_doubles_opus_and_carries_the_cache_lines() {
+        // Fast mode is $10/$50 against Opus 5's standard $5/$25, and the API reports
+        // the same model id either way — so every fast request was billed at half.
+        // Nick's own Claude Code runs in fast mode, which is how this was noticed.
+        let db = PricingDatabase::with_defaults();
+
+        for model in ["claude-opus-5", "claude-opus-4-8"] {
+            let std_cost =
+                db.calculate_cost(LLMProvider::Anthropic, model, 1_000_000, 1_000_000, None, None);
+            assert!(
+                (std_cost.input_cost - 5.00).abs() < 0.01
+                    && (std_cost.output_cost - 25.00).abs() < 0.01,
+                "{model} standard should stay $5/$25, got {}/{}",
+                std_cost.input_cost,
+                std_cost.output_cost
+            );
+
+            let fast = db.calculate_cost_with_speed(
+                LLMProvider::Anthropic,
+                model,
+                1_000_000,
+                1_000_000,
+                None,
+                None,
+                true,
+            );
+            assert!(
+                (fast.input_cost - 10.00).abs() < 0.01 && (fast.output_cost - 50.00).abs() < 0.01,
+                "{model} fast should be $10/$50, got {}/{}",
+                fast.input_cost,
+                fast.output_cost
+            );
+
+            // The multipliers stack on the FAST base, per Anthropic's pricing page —
+            // 0.1x of $10, not 0.1x of $5. Missing this would leave most of an agent
+            // session's spend at the standard rate while the base looked corrected.
+            let fast_cached = db.calculate_cost_with_speed(
+                LLMProvider::Anthropic,
+                model,
+                1_000_000,
+                0,
+                Some(1_000_000),
+                None,
+                true,
+            );
+            assert!(
+                (fast_cached.total_cost - 1.00).abs() < 0.01,
+                "{model} fast cache read should be $1.00 (0.1x of the $10 fast base, not the $0.50 standard), got {}",
+                fast_cached.total_cost
+            );
+        }
+    }
+
+    #[test]
+    fn test_fast_mode_on_a_model_without_it_bills_standard() {
+        // Opus 4.6 accepts `speed: "fast"` and bills at standard rates, so asking for
+        // fast on a model with no fast tier must not invent a premium.
+        let db = PricingDatabase::with_defaults();
+        let fast = db.calculate_cost_with_speed(
+            LLMProvider::Anthropic,
+            "claude-opus-4-6",
+            1_000_000,
+            1_000_000,
+            None,
+            None,
+            true,
+        );
+        assert!(
+            (fast.input_cost - 5.00).abs() < 0.01 && (fast.output_cost - 25.00).abs() < 0.01,
+            "expected standard $5/$25 for a model with no fast tier, got {}/{}",
+            fast.input_cost,
+            fast.output_cost
+        );
+    }
+
+    #[test]
     fn test_claude_5_1_cache_reads_are_quarter_rate() {
         // Fable 5.1 and Mythos 5.1 read cache at 0.025x base input ($0.25/MTok),
         // where every other Claude model uses 0.1x. Base and cache WRITE rates are
@@ -1115,10 +1295,16 @@ mod tests {
                 (j.input_per_mtok - d.input_per_mtok).abs() < 1e-9
                     && (j.output_per_mtok - d.output_per_mtok).abs() < 1e-9
                     && opt_close(j.cache_read_per_mtok, d.cache_read_per_mtok)
-                    && opt_close(j.cache_write_per_mtok, d.cache_write_per_mtok),
-                "pricing.json `{key}` = ({}/{}, r={:?}, w={:?}) disagrees with with_defaults() ({}/{}, r={:?}, w={:?})",
+                    && opt_close(j.cache_write_per_mtok, d.cache_write_per_mtok)
+                    // Fast rates too: the daemon prices from the JSON, so a fast tier
+                    // added only to the Rust defaults would never fire in production.
+                    && opt_close(j.fast_input_per_mtok, d.fast_input_per_mtok)
+                    && opt_close(j.fast_output_per_mtok, d.fast_output_per_mtok),
+                "pricing.json `{key}` = ({}/{}, r={:?}, w={:?}, fast={:?}/{:?}) disagrees with with_defaults() ({}/{}, r={:?}, w={:?}, fast={:?}/{:?})",
                 j.input_per_mtok, j.output_per_mtok, j.cache_read_per_mtok, j.cache_write_per_mtok,
+                j.fast_input_per_mtok, j.fast_output_per_mtok,
                 d.input_per_mtok, d.output_per_mtok, d.cache_read_per_mtok, d.cache_write_per_mtok,
+                d.fast_input_per_mtok, d.fast_output_per_mtok,
             );
         }
     }

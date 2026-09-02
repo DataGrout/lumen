@@ -33,6 +33,29 @@ pub struct TokenUsage {
     pub cache_read_tokens: Option<u64>,
     #[serde(default)]
     pub cache_creation_tokens: Option<u64>,
+    /// Whether the request asked for fast mode (`"speed": "fast"`).
+    ///
+    /// It rides here because this struct is already threaded from the parser through
+    /// the proxy to the aggregator, and cost is the only thing that needs it. The flag
+    /// comes from the REQUEST body — a response carries no sign of it — so the proxy
+    /// sets it after parsing usage rather than the parser doing so.
+    ///
+    /// Fast mode doubles Opus 5 / Opus 4.8 to $10/$50. The model id reported is the
+    /// same either way, so without this every fast-mode request was billed at half.
+    #[serde(default)]
+    pub fast: bool,
+}
+
+/// Did this request ask for fast mode?
+///
+/// `"speed": "fast"` is a top-level field on the Anthropic Messages request. Only
+/// Opus 5 and Opus 4.8 price it differently; the pricing table decides that, so this
+/// only reports what was asked for.
+pub fn is_fast_request(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["speed"].as_str().map(|s| s.eq_ignore_ascii_case("fast")))
+        .unwrap_or(false)
 }
 
 pub fn detect_provider(url: &str) -> Option<LLMProvider> {
@@ -312,6 +335,7 @@ pub fn estimate_usage_from_bytes(request_bytes: u64, response_bytes: u64) -> Tok
         total_tokens: input_estimate + output_estimate,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        fast: false,
     }
 }
 
@@ -367,6 +391,7 @@ fn try_usage_from_value(v: &serde_json::Value) -> Option<TokenUsage> {
                 total_tokens: total,
                 cache_read_tokens: cache,
                 cache_creation_tokens: None,
+                fast: false,
             });
         }
 
@@ -385,6 +410,7 @@ fn try_usage_from_value(v: &serde_json::Value) -> Option<TokenUsage> {
                 total_tokens: inp + out,
                 cache_read_tokens: cache_read,
                 cache_creation_tokens: cache_create,
+                fast: false,
             });
         }
     }
@@ -405,6 +431,7 @@ fn try_usage_from_value(v: &serde_json::Value) -> Option<TokenUsage> {
                 total_tokens: total,
                 cache_read_tokens: u.get("cachedContentTokenCount").and_then(|t| t.as_u64()),
                 cache_creation_tokens: None,
+                fast: false,
             });
         }
     }
@@ -445,6 +472,7 @@ fn extract_openai_usage(body: &str) -> Result<TokenUsage> {
         total_tokens: usage.total_tokens,
         cache_read_tokens: usage.prompt_tokens_details.and_then(|d| d.cached_tokens),
         cache_creation_tokens: None,
+        fast: false,
     })
 }
 
@@ -475,6 +503,7 @@ fn extract_anthropic_usage(body: &str) -> Result<TokenUsage> {
                 total_tokens: usage.input_tokens + usage.output_tokens + cr + cc,
                 cache_read_tokens: usage.cache_read_input_tokens,
                 cache_creation_tokens: usage.cache_creation_input_tokens,
+                fast: false,
             });
         }
     }
@@ -541,6 +570,7 @@ pub fn extract_anthropic_streaming_usage(body: &str) -> Option<TokenUsage> {
         total_tokens: inp + out + cr + cc,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_create,
+        fast: false,
     })
 }
 
@@ -574,6 +604,7 @@ fn extract_google_usage(body: &str) -> Result<TokenUsage> {
         total_tokens: usage.total_token_count,
         cache_read_tokens: usage.cached_content_token_count,
         cache_creation_tokens: None,
+        fast: false,
     })
 }
 
@@ -787,5 +818,39 @@ mod tests {
             scan_bytes_for_model(bytes),
             Some("gpt-4o-mini-2024".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod fast_mode_tests {
+    use super::*;
+
+    #[test]
+    fn detects_fast_mode_from_the_request() {
+        assert!(is_fast_request(r#"{"model":"claude-opus-5","speed":"fast"}"#));
+        // Case-insensitive: the field is a caller-supplied string.
+        assert!(is_fast_request(r#"{"speed":"FAST"}"#));
+    }
+
+    #[test]
+    fn everything_else_is_standard_speed() {
+        assert!(!is_fast_request(r#"{"model":"claude-opus-5"}"#));
+        assert!(!is_fast_request(r#"{"speed":"standard"}"#));
+        // A non-string speed must not be read as fast.
+        assert!(!is_fast_request(r#"{"speed":true}"#));
+        // Bodies we cannot parse are standard, not fast: guessing "fast" would
+        // double the reported cost of every unparseable request.
+        assert!(!is_fast_request("not json at all"));
+        assert!(!is_fast_request(""));
+    }
+
+    #[test]
+    fn a_nested_speed_field_is_not_the_request_speed() {
+        // `speed` is top-level on the Messages request. Something mentioning speed
+        // inside a message must not flip the whole request to premium billing.
+        assert!(!is_fast_request(
+            r#"{"model":"claude-opus-5","messages":[{"role":"user","content":"{\"speed\":\"fast\"}"}]}"#
+        ));
+        assert!(!is_fast_request(r#"{"metadata":{"speed":"fast"}}"#));
     }
 }

@@ -113,13 +113,14 @@ impl Aggregator {
     }
 
     pub fn record_usage(&self, provider: LLMProvider, model: &str, url: &str, usage: TokenUsage) {
-        let cost = self.pricing.calculate_cost(
+        let cost = self.pricing.calculate_cost_with_speed(
             provider,
             model,
             usage.input_tokens,
             usage.output_tokens,
             usage.cache_read_tokens,
             usage.cache_creation_tokens,
+            usage.fast,
         );
 
         // Full billed input: Anthropic reports fresh input, cache_read, and cache_creation
@@ -353,6 +354,7 @@ mod tests {
                 total_tokens: 150,
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
+                fast: false,
             };
             agg.record_usage(
                 LLMProvider::OpenAI,

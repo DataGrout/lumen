@@ -503,6 +503,8 @@ impl LumenProxy {
                 let url_owned = url_str.clone();
                 let method_owned = method_string.clone();
                 let model_owned = model.clone();
+                // Fast mode is only visible on the REQUEST, and doubles Opus 5 / 4.8.
+                let fast_owned = parser::is_fast_request(&String::from_utf8_lossy(&body_bytes));
 
                 tokio::spawn(async move {
                     let mut collected = Vec::new();
@@ -547,7 +549,7 @@ impl LumenProxy {
                                             let m = model_owned.as_deref().unwrap_or("unknown");
                                             proxy
                                                 .aggregator
-                                                .record_usage(provider, m, &url_owned, usage);
+                                                .record_usage(provider, m, &url_owned, parser::TokenUsage { fast: fast_owned, ..usage });
                                             early_caps = Some(caps);
                                         }
                                     }
@@ -592,7 +594,7 @@ impl LumenProxy {
                                     let m = model_owned.as_deref().unwrap_or("unknown");
                                     proxy
                                         .aggregator
-                                        .record_usage(provider, m, &url_owned, usage);
+                                        .record_usage(provider, m, &url_owned, parser::TokenUsage { fast: fast_owned, ..usage });
                                 }
                             }
                         }
@@ -978,6 +980,8 @@ impl LumenProxy {
                 let url_owned = upstream_url.clone();
                 let method_owned = method_string.clone();
                 let model_owned = model.clone();
+                // Fast mode is only visible on the REQUEST, and doubles Opus 5 / 4.8.
+                let fast_owned = parser::is_fast_request(&request_body_str);
                 let req_body_str_owned = request_body_str.to_string();
                 let req_bytes_owned = body_bytes.clone();
 
@@ -1020,7 +1024,7 @@ impl LumenProxy {
                                             }
                                             caps.push("cost".to_string());
                                             let m = model_owned.as_deref().unwrap_or("unknown");
-                                            proxy.aggregator.record_usage(p, m, &url_owned, usage);
+                                            proxy.aggregator.record_usage(p, m, &url_owned, parser::TokenUsage { fast: fast_owned, ..usage });
                                             early_caps = Some(caps);
                                         }
                                     }
@@ -1214,7 +1218,7 @@ impl LumenProxy {
                                         provider,
                                         &final_model,
                                         &url_owned,
-                                        usage,
+                                        parser::TokenUsage { fast: fast_owned, ..usage },
                                     );
                                 }
                             }

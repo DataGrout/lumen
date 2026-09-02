@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Quitting Lumen no longer leaves the machine without internet.** The system-proxy teardown cleared only whichever network service happened to be primary at the time, so setting the proxy on Wi-Fi, plugging in ethernet and quitting left Wi-Fi aimed at a port nothing was listening on. The setting lives in `preferences.plist` and survives a reboot, while Lumen was not a login item — so on any boot where nobody launched it by hand, every app honouring the system proxy pointed into a closed local port, and it recurred every boot until the user found the setting themselves. Tethering to a hotspot did not help, because a hotspot rides the same "Wi-Fi" service. Lumen now clears its proxy from *every* service, registers as a login item for as long as it manages one, and reconciles onto the primary service every twenty seconds. Ownership is matched on `127.0.0.1` **and** its own port, so a proxy you configured yourself on another port survives untouched.
+- **The system proxy follows the route the machine actually takes.** Interface selection returned the first service holding any IP address, which is a different question from which service macOS routes through. With Wi-Fi associated and a USB ethernet dongle plugged in, the proxy landed on whichever sorted first while every request left unproxied — capture stopping silently mid-session. The primary service now comes from `scutil`, which is what applications consult.
+- **A daemon that will not start now says why.** Its output went to `/dev/null` and it restarted every two seconds forever, so the app showed "not running", Restart appeared to do nothing, and no record of the failure existed anywhere on the machine. Output is kept at `~/.lumen/daemon.log` (written by the daemon itself, so Windows gets one too), the reason appears in the alert, and repeated failures back off and stop after four attempts. Restart clears that budget, so an explicit retry is a real one.
+- **Ctrl+C no longer kills Claude Desktop.** Launching a GUI app as a child process put it in the terminal's foreground process group, so stopping the proxy took the user's editor with it — and a second Ctrl+C was needed to stop the thing they were aiming at. Launches now go through LaunchServices, so the launched app is not our descendant.
+- **The UI no longer deadlocks on a subprocess.** Reading a command's output only after waiting for it to exit deadlocks the moment that command outproduces the ~64KB pipe buffer, which `networksetup` does on a machine with VPN adapters. All copies of that pattern now drain the pipe while the child runs, under a timeout.
+- **An expired certificate no longer blocks the browser.** Leaf certificates were served from cache past their own expiry, and CA staleness was judged from the file's modification time rather than the certificate's `notAfter`. Because macOS trust is per-certificate, regenerating alone could not unstick anyone either — a fresh CA is untrusted until approved. The proxy now degrades to a plain tunnel when its CA is unusable, so requests keep working untracked while the certificate is fixed.
+- **The CA outlives the user's patience for approving it.** Validity was 365 days, which scheduled a forced re-approval for every user once a year. It is now ten years.
+- **Fast mode is no longer billed at half.** `speed: "fast"` on Opus 5 and Opus 4.8 costs $10/$50 against their standard $5/$25, and the API reports the same model id either way. The request's speed is now read and carried into the cost, with the prompt-cache multipliers stacking on the fast base rather than the standard one — cache reads are most of an agent session's tokens, so correcting only the base rate would have left most of the error in place.
+
 ## [0.2.3] — 2026-07-25
 
 ### Added
