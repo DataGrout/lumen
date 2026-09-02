@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "updated": "2026-08-25",
+  "updated": "2026-09-01",
   "notes": {
     "cursor": "Cursor On-Demand effective blended rates, NOT Anthropic/OpenAI direct prices. Cursor caches conversation context very aggressively (>85% hit rate typical), and its binary protobuf responses do not expose cache_read_input_tokens the way the Anthropic JSON API does. BidiAppend calls carrying conversation history are filtered as proxy noise, so byte-estimated tokens are heavily skewed toward output_tokens. These rates are calibrated against observed Cursor On-Demand invoices to land within ~2x of actual billing. If Cursor ever exposes cache-aware token counts in its gRPC responses, raise these toward the underlying Anthropic/OpenAI direct rates.",
     "retired": "Model has been retired from the OpenAI product and/or API. Entries are kept for cost attribution of historical traffic. o1-preview shutdown 2025-07-28; o1-mini shutdown 2025-10-27; entire o-series retired from ChatGPT 2026-02-13 (API access may still function for existing integrations).",
-    "sonnet5-intro": "Standard rate tracked here. Anthropic runs an introductory rate of $2/$10 per MTok (input/output) through 2026-08-31; the $3/$15 standard rate takes effect 2026-09-01, so this entry is already correct as of then and needs no change. To reflect the promo before then, temporarily lower this entry to 2.00/10.00 (cache_read 0.20, cache_write 2.50).",
     "openai_5_6_cut": "2026-07-30: OpenAI cut gpt-5.6-luna and gpt-5.6-terra by up to 80%. Luna 1.00/6.00 -> 0.20/1.20, Terra 2.50/15.00 -> 2.00/12.00. Verified against the OpenAI pricing page on 2026-07-31.",
     "gemini_promotional": "Gemini 3.6/3.7 Flash and 3 Flash Preview carry promotional rates through 2026-12-31; input/output/cache all DOUBLE on 2027-01-01 (3.6/3.7 Flash -> 1.50/7.50/0.15). Re-check this file in January 2027.",
-    "claude_sonnet_5": "Claude Sonnet 5 launched at an introductory $2/$10 through 2026-08-31; Anthropic has since made that the standard price and cancelled the planned rise to $3/$15.",
-    "unpriced_variants": "Dated aliases (claude-haiku-4-5-20251001, gpt-4o-2024-08-06, ...) and retired models are kept deliberately: the API reports those ids, and historical events must keep repricing correctly. Removing them sends old traffic to the $5/$15 unknown-model fallback."
+    "claude_sonnet_5": "Claude Sonnet 5 launched at an introductory $2/$10 through 2026-08-31. Anthropic has since made that the standard price and cancelled the planned rise to $3/$15, so 2.00/10.00 is simply the rate now.",
+    "unpriced_variants": "Dated aliases (claude-haiku-4-5-20251001, gpt-4o-2024-08-06, ...) and retired models are kept deliberately: the API reports those ids, and historical events must keep repricing correctly. Removing them sends old traffic to the $5/$15 unknown-model fallback.",
+    "claude_51_cache_read": "Claude Fable 5.1 and Mythos 5.1 price cache reads at 0.025x base input ($0.25/MTok), not the 0.1x every other Claude model uses. Verified against the Anthropic pricing page 2026-09-01. Do not 'correct' these to $1.00 to match Fable 5 / Mythos 5 \u2014 the difference is deliberate and fourfold on the cache line, which dominates an agent workload."
   },
   "models": [
     {
@@ -45,6 +45,15 @@
     },
     {
       "provider": "anthropic",
+      "model": "claude-fable-5-1",
+      "input_per_mtok": 10.0,
+      "output_per_mtok": 50.0,
+      "cache_read_per_mtok": 0.25,
+      "cache_write_per_mtok": 12.5,
+      "note": "claude_51_cache_read"
+    },
+    {
+      "provider": "anthropic",
       "model": "claude-haiku-4-5",
       "input_per_mtok": 1.0,
       "output_per_mtok": 5.0,
@@ -66,6 +75,15 @@
       "output_per_mtok": 50.0,
       "cache_read_per_mtok": 1.0,
       "cache_write_per_mtok": 12.5
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-mythos-5-1",
+      "input_per_mtok": 10.0,
+      "output_per_mtok": 50.0,
+      "cache_read_per_mtok": 0.25,
+      "cache_write_per_mtok": 12.5,
+      "note": "claude_51_cache_read"
     },
     {
       "provider": "anthropic",
@@ -202,7 +220,7 @@
       "output_per_mtok": 10.0,
       "cache_read_per_mtok": 0.2,
       "cache_write_per_mtok": 2.5,
-      "note": "sonnet5-intro"
+      "note": "claude_sonnet_5"
     },
     {
       "provider": "cursor",

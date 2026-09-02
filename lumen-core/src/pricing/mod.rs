@@ -224,6 +224,28 @@ impl PricingDatabase {
             Some(12.50),
         );
 
+        // Fable 5.1 / Mythos 5.1 (2026-09). Same $10/$50 base and the same cache
+        // WRITE rates as 5.0 — but cache READS are 0.025x base rather than the 0.1x
+        // every other Claude model uses, so $0.25/MTok and not $1.00. Getting that
+        // wrong overstates a cached-heavy agent workload fourfold on the cache line,
+        // which is most of the tokens in a Claude Code session.
+        db.add(
+            "anthropic",
+            "claude-fable-5-1",
+            10.00,
+            50.00,
+            Some(0.25),
+            Some(12.50),
+        );
+        db.add(
+            "anthropic",
+            "claude-mythos-5-1",
+            10.00,
+            50.00,
+            Some(0.25),
+            Some(12.50),
+        );
+
         // Sonnet 4 family — $3/$15 tier
         db.add(
             "anthropic",
@@ -961,6 +983,44 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_5_1_cache_reads_are_quarter_rate() {
+        // Fable 5.1 and Mythos 5.1 read cache at 0.025x base input ($0.25/MTok),
+        // where every other Claude model uses 0.1x. Base and cache WRITE rates are
+        // unchanged from 5.0, so the only thing that distinguishes them is the line
+        // that dominates an agent workload — a Claude Code session is mostly cache
+        // reads. Pricing them like Fable 5 overstates that line fourfold.
+        let db = PricingDatabase::with_defaults();
+
+        for model in ["claude-fable-5-1", "claude-mythos-5-1"] {
+            let base = db.calculate_cost(LLMProvider::Anthropic, model, 1_000_000, 1_000_000, None, None);
+            assert!(
+                (base.input_cost - 10.00).abs() < 0.01 && (base.output_cost - 50.00).abs() < 0.01,
+                "{model}: expected $10/$50 base, got {}/{}",
+                base.input_cost,
+                base.output_cost
+            );
+
+            let cached =
+                db.calculate_cost(LLMProvider::Anthropic, model, 1_000_000, 0, Some(1_000_000), None);
+            assert!(
+                (cached.total_cost - 0.25).abs() < 0.01,
+                "{model}: expected $0.25 cache read (0.025x, not the $1.00 that 0.1x would give), got {}",
+                cached.total_cost
+            );
+        }
+
+        // And 5.0 keeps the standard 0.1x, so this is a real distinction and not a
+        // blanket change to the family.
+        let five =
+            db.calculate_cost(LLMProvider::Anthropic, "claude-fable-5", 1_000_000, 0, Some(1_000_000), None);
+        assert!(
+            (five.total_cost - 1.00).abs() < 0.01,
+            "claude-fable-5 should still read cache at $1.00, got {}",
+            five.total_cost
+        );
+    }
+
+    #[test]
     fn test_haiku_4_5_is_1_5_not_0_80_4() {
         // claude-haiku-4-5 is the $1/$5 tier, not the retired Haiku 3.5 rate.
         let db = PricingDatabase::with_defaults();
@@ -997,8 +1057,10 @@ mod tests {
                 10.00_f64,
             ),
             (LLMProvider::Anthropic, "claude-fable-5", 10.00, 50.00),
+            (LLMProvider::Anthropic, "claude-fable-5-1", 10.00, 50.00),
             (LLMProvider::Anthropic, "claude-opus-5", 5.00, 25.00),
             (LLMProvider::Anthropic, "claude-mythos-5", 10.00, 50.00),
+            (LLMProvider::Anthropic, "claude-mythos-5-1", 10.00, 50.00),
             (LLMProvider::Google, "gemini-3.1-pro-preview", 2.00, 12.00),
             (LLMProvider::Google, "gemini-3.6-flash", 0.75, 3.75),
             (LLMProvider::Google, "gemini-3.5-flash", 1.50, 9.00),
