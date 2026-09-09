@@ -2,7 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.0] — 2026-09-09
+
+### Added
+
+- **Lumen now says when a trusted certificate has gone unused.** Removing the CA only helps someone who thinks to press the button, and a user who stops using proxy mode never will — which is precisely how a local root outlives its purpose in a keychain. The daemon records when it last captured a call, so once a trusted CA has seen nothing for ninety days the certificate panel says so and points at the removal. A CA that was trusted and *never* used counts too: with no capture to measure from, the window runs from the certificate's own creation date. The threshold lives in the daemon and is reported to the app, so there is no second copy of the number to drift, and an app talking to an older daemon that sends nothing simply shows no advisory. The timestamp is written to `~/.lumen/activity.json` at most once every fifteen minutes, so an intercepted call does not mean a disk write.
 
 ### Fixed
 
