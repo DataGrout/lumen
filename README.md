@@ -174,11 +174,30 @@ The setup wizard (launched on first run) walks through this automatically. To do
 # The CA cert is generated at first launch and lives at:
 ~/.lumen/ca.pem
 
-# Trust it system-wide (prompts for your password):
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.lumen/ca.pem
+# Trust it for your account only (prompts for your login password):
+security add-trusted-cert -r trustRoot \
+  -k ~/Library/Keychains/login.keychain-db ~/.lumen/ca.pem
 ```
 
+This is the login keychain rather than the System keychain, deliberately: the trust applies to your user account and needs no administrator rights. The CA private key is generated on your machine at first launch, is unique to that install, never leaves it, and is written to `~/.lumen/ca-key.pem` with `0600` permissions.
+
 You can also do this from **Settings -> Certificate -> Trust CA** inside the Lumen UI.
+
+### Removing the certificate
+
+Keychain trust outlives the application, so deleting Lumen does not on its own remove the certificate. Use **Settings -> Certificate -> Remove Certificate**, which drops the trust setting and deletes the local key.
+
+By hand:
+
+```bash
+# Removes the trust setting and the certificate together
+security delete-certificate -c "Lumen Local CA" -t
+
+# Then the key material
+rm -f ~/.lumen/ca.pem ~/.lumen/ca-key.pem
+```
+
+On Windows, `packaging/windows/lumen.ps1 -Cleanup` does the same and also clears the persisted proxy environment variables. Linux has no trust-store integration at all, because relay mode does not need a CA.
 
 ### 2. Configure your LLM client
 

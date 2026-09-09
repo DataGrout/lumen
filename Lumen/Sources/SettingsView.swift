@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var activeInterface = "Wi-Fi"
     @State private var caInstallBusy = false
     @State private var caInstallError: String? = nil
+    @State private var caRemoveBusy = false
+    @State private var caRemoveConfirm = false
 
     /// Trust state is owned by APIClient now (background-refreshed every 5s).
     /// This computed view-side accessor lets existing UI code keep reading
@@ -292,6 +294,66 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
             }
 
+            // Trust set with `add-trusted-cert` outlives the application, so
+            // the app has to be able to take it back out. Offered whenever a
+            // CA exists, not only while it is trusted, so an untrusted
+            // leftover can be cleared too.
+            if apiClient.caInfo != nil {
+                if caRemoveConfirm {
+                    HStack(spacing: 8) {
+                        Button { caRemoveConfirm = false } label: {
+                            Text("Cancel")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 7)
+                                .background(Color.white.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: removeCA) {
+                            HStack(spacing: 4) {
+                                if caRemoveBusy {
+                                    ProgressView().scaleEffect(0.5).frame(width: 10, height: 10)
+                                } else {
+                                    Image(systemName: "trash").font(.system(size: 9))
+                                }
+                                Text(caRemoveBusy ? "Removing…" : "Remove")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(.red.opacity(0.9))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                            .background(Color.red.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .overlay(RoundedRectangle(cornerRadius: 5)
+                                .stroke(Color.red.opacity(0.2), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(caRemoveBusy)
+                    }
+
+                    Text("Drops the keychain trust setting and deletes the local key. Proxy mode stops decoding HTTPS until a new certificate is trusted.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Button { caRemoveConfirm = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "trash").font(.system(size: 9))
+                            Text("Remove Certificate").font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.4))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(Color.white.opacity(0.04))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
             Text(caTrusted
                  ? "Certificate is trusted. HTTPS proxy mode is active."
                  : "macOS will ask for your login password once to set trust.")
@@ -340,6 +402,65 @@ struct SettingsView: View {
                         ? "Trust failed (code \(proc.terminationStatus))."
                         : errStr
                 }
+            }
+        }
+    }
+
+    /// The counterpart to `trustCA`, and the reason it needs to exist: a trust
+    /// setting made with `add-trusted-cert` outlives the application. Deleting
+    /// Lumen left a ten-year root in the login keychain with nothing able to
+    /// walk it back out — the Windows packaging script has always reverted its
+    /// own trust on cleanup, macOS had no equivalent at all.
+    ///
+    /// `delete-certificate -t` drops the user trust settings along with the
+    /// certificate, but only for one matching certificate per call, so a CA
+    /// that was trusted more than once needs more than one pass. The loop is
+    /// bounded twice over: a non-zero exit means nothing is left to match, and
+    /// the cap stops a persistent failure from spinning.
+    private func removeCA() {
+        caRemoveBusy = true
+        caInstallError = nil
+        let caPath = apiClient.caInfo?.path
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var removed = 0
+            for _ in 0..<5 {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+                proc.arguments = ["delete-certificate", "-c", APIClient.caCommonName, "-t"]
+                proc.standardOutput = Pipe()
+                proc.standardError = Pipe()
+                do { try proc.run(); proc.waitUntilExit() } catch { break }
+                guard proc.terminationStatus == 0 else { break }
+                removed += 1
+            }
+
+            // Delete the key material too, so "removed" means removed rather
+            // than "untrusted but still sitting on disk". The daemon mints a
+            // fresh CA if proxy mode is ever set up again.
+            //
+            // Only the two files this CA owns, resolved from the directory the
+            // daemon reported: the Conduit identity keeps its own `ca.pem`
+            // under ~/.conduit and deleting that would break the DataGrout
+            // connection rather than the interception certificate.
+            if let caPath {
+                let dir = (caPath as NSString).deletingLastPathComponent as NSString
+                for file in ["ca.pem", "ca-key.pem"] {
+                    try? FileManager.default.removeItem(
+                        atPath: dir.appendingPathComponent(file))
+                }
+            }
+
+            DispatchQueue.main.async {
+                caRemoveBusy = false
+                caRemoveConfirm = false
+                apiClient.caTrusted = false
+                // Re-read rather than trusting the optimistic flip above: if a
+                // duplicate trust entry survived, the badge should say so.
+                apiClient.refreshCATrust()
+                caInstallError = removed == 0
+                    ? "No \"\(APIClient.caCommonName)\" certificate was found to remove."
+                    : nil
             }
         }
     }

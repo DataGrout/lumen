@@ -269,6 +269,12 @@ final class APIClient {
     /// `security dump-trust-settings` subprocess at draw time.
     var caTrusted: Bool = false
 
+    /// The common name `lumen-core` mints the interception CA under (see
+    /// `ca.rs`). Reading trust and removing it both match on this string, so
+    /// it lives in one place: a copy that drifted from the Rust side would
+    /// leave the app quietly unable to see, or to remove, its own certificate.
+    static let caCommonName = "Lumen Local CA"
+
     private let baseURL = "http://127.0.0.1:9091"
     private var pollTimer: Timer?
     private var trustCheckTimer: Timer?
@@ -331,7 +337,7 @@ final class APIClient {
             // `caTrusted` frozen at whatever it last managed to read.
             let out = Shell.capture(executable: "/usr/bin/security",
                                     arguments: ["dump-trust-settings"])
-            let trusted = out.localizedCaseInsensitiveContains("Lumen Local CA")
+            let trusted = out.localizedCaseInsensitiveContains(Self.caCommonName)
             DispatchQueue.main.async {
                 self?.caTrusted = trusted
             }
