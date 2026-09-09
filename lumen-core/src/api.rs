@@ -481,11 +481,23 @@ async fn handle_api_request(
 
         (Method::GET, "/ca/info") => {
             let health = state.cert_cache.ca_health();
-            let not_after = state
-                .ca
-                .not_after()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs());
+            let unix_secs = |t: std::time::SystemTime| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_secs() as i64)
+            };
+            let not_after = state.ca.not_after().and_then(unix_secs);
+
+            // How long this trusted root has been sitting unused. Measured from
+            // the CA's own notBefore when nothing was ever captured, so a
+            // certificate trusted months ago and never used once still reports a
+            // real figure instead of nothing at all.
+            let last_capture_at = crate::activity::last_capture_at();
+            let idle_days = crate::activity::idle_days(
+                last_capture_at,
+                state.ca.not_before().and_then(unix_secs),
+                chrono::Utc::now().timestamp(),
+            );
 
             json_response(
                 StatusCode::OK,
@@ -505,6 +517,12 @@ async fn handle_api_request(
                     // True when the proxy has stood down to plain tunnelling: the
                     // user's requests still work, but nothing is being captured.
                     "capture_paused": !health.usable(),
+                    // Unix seconds of the last captured call; null if nothing ever was.
+                    "last_capture_at": last_capture_at,
+                    "idle_days": idle_days,
+                    // The daemon owns the threshold so the app has no second copy
+                    // of it to drift from.
+                    "idle_advisory_days": crate::activity::IDLE_ADVISORY_DAYS,
                 }),
             )
         }

@@ -294,6 +294,37 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
             }
 
+            // A trusted root that nothing is using.
+            //
+            // The certificate is minted for ten years, so expiry will never
+            // clean up after someone who stopped using proxy mode — and the
+            // Remove button below only reaches the users who go looking for it.
+            // Long idleness is the one signal that says the trust is no longer
+            // buying anything, so it is worth saying once, here, where the
+            // action already lives.
+            //
+            // Advisory only: this removes nothing and asks for nothing. It is
+            // also gated on the CA actually being trusted — an untrusted
+            // leftover costs the user nothing to leave alone.
+            if caTrusted, let info = apiClient.caInfo, info.isIdle, let days = info.idleDays {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange.opacity(0.8))
+                    Text("No traffic captured in \(days) days. If you're done with proxy mode, removing the certificate takes the trust back out of your keychain.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange.opacity(0.75))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.orange.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .overlay(RoundedRectangle(cornerRadius: 5)
+                    .stroke(Color.orange.opacity(0.15), lineWidth: 1))
+            }
+
             // Trust set with `add-trusted-cert` outlives the application, so
             // the app has to be able to take it back out. Offered whenever a
             // CA exists, not only while it is trusted, so an untrusted

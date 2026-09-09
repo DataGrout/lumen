@@ -113,6 +113,13 @@ impl Aggregator {
     }
 
     pub fn record_usage(&self, provider: LLMProvider, model: &str, url: &str, usage: TokenUsage) {
+        // Every captured call lands here, which makes this the one place that can
+        // say "proxy mode is still being used". The app reads it back off
+        // `/ca/info` to offer certificate removal to users who have stopped —
+        // see `activity.rs`. Cheap enough for the hot path: a relaxed atomic
+        // store, with the disk write debounced to once every fifteen minutes.
+        crate::activity::record_capture();
+
         let cost = self.pricing.calculate_cost_with_speed(
             provider,
             model,

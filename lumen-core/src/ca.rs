@@ -160,16 +160,38 @@ impl LumenCA {
 
     /// The certificate's own `notAfter`, or `None` when it cannot be parsed.
     pub fn not_after(&self) -> Option<std::time::SystemTime> {
+        self.validity().map(|(_, not_after)| not_after)
+    }
+
+    /// The certificate's own `notBefore` — the moment this CA started to exist.
+    ///
+    /// Read as the baseline for "how long has this been sitting in the user's
+    /// keychain unused": when nothing has ever been captured there is no other
+    /// date to measure idleness from, and a root trusted months ago and never
+    /// used once is precisely the case worth telling the user about.
+    pub fn not_before(&self) -> Option<std::time::SystemTime> {
+        self.validity().map(|(not_before, _)| not_before)
+    }
+
+    /// `(notBefore, notAfter)` from the certificate itself, or `None` when the
+    /// PEM cannot be parsed or either bound predates the Unix epoch.
+    fn validity(&self) -> Option<(std::time::SystemTime, std::time::SystemTime)> {
         use x509_parser::prelude::*;
 
         let (_, pem) = parse_x509_pem(self.cert_pem.as_bytes()).ok()?;
         let (_, cert) = parse_x509_certificate(&pem.contents).ok()?;
 
-        let ts = cert.validity().not_after.timestamp();
-        if ts < 0 {
-            return None;
-        }
-        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts as u64))
+        let validity = cert.validity();
+        let to_system_time = |ts: i64| {
+            if ts < 0 {
+                return None;
+            }
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts as u64))
+        };
+        Some((
+            to_system_time(validity.not_before.timestamp())?,
+            to_system_time(validity.not_after.timestamp())?,
+        ))
     }
 
     /// Is this CA already expired, or close enough that it will expire before a
@@ -483,6 +505,28 @@ mod tests {
             ca.expires_within(std::time::Duration::from_secs(3700 * 86_400)),
             Some(true)
         );
+    }
+
+    /// `not_before` has to be a real date on a freshly minted CA: it is the
+    /// only baseline available for "trusted a while ago, never used", so a
+    /// `None` here would silently disable the idle advisory.
+    #[test]
+    fn test_not_before_is_at_or_before_now() {
+        let ca = LumenCA::generate().expect("generate");
+        let not_before = ca
+            .not_before()
+            .expect("a fresh CA has a parseable notBefore");
+        let not_after = ca.not_after().expect("...and a parseable notAfter");
+
+        assert!(not_before <= std::time::SystemTime::now());
+        assert!(not_before < not_after);
+    }
+
+    #[test]
+    fn test_not_before_is_none_for_unparseable_pem() {
+        let mut ca = LumenCA::generate().expect("generate");
+        ca.cert_pem = "-----BEGIN CERTIFICATE-----\nnope\n-----END CERTIFICATE-----\n".to_string();
+        assert_eq!(ca.not_before(), None);
     }
 
     #[test]

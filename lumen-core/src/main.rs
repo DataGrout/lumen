@@ -1,3 +1,4 @@
+mod activity;
 mod aggregator;
 mod api;
 mod ca;
@@ -124,6 +125,9 @@ async fn main() {
         .map(|w| w[1].clone());
 
     let pricing = pricing::loader::load_pricing();
+    // Seed the last-capture timestamp from disk before anything can be captured,
+    // so idleness is measured across restarts rather than from this one.
+    activity::install();
     let aggregator = Arc::new(aggregator::Aggregator::new(pricing));
 
     let ca = ca::LumenCA::load_or_generate().expect("Failed to initialize CA");

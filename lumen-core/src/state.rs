@@ -75,6 +75,13 @@ pub fn dg_config_path() -> Option<PathBuf> {
     Some(home_dir()?.join(".lumen").join("dg_config.json"))
 }
 
+/// Where the last-capture timestamp lives. See `activity.rs` for why it is
+/// persisted at all: idleness measured from the last daemon start resets on
+/// every restart, and the question being asked spans months.
+pub fn activity_path() -> Option<PathBuf> {
+    Some(home_dir()?.join(".lumen").join("activity.json"))
+}
+
 pub fn load_dg_config_from_disk() -> Option<DGConfig> {
     let path = dg_config_path()?;
     let bytes = std::fs::read(&path).ok()?;

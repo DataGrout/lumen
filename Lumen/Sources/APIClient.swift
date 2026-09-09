@@ -215,6 +215,37 @@ struct CAInfo: Codable {
     var path: String?
     var subject: String
     var issuer: String
+    /// Unix seconds of the last call the daemon captured, or nil if it has never
+    /// captured one.
+    var lastCaptureAt: Int?
+    /// Whole days since that capture — measured from the certificate's own
+    /// creation date when nothing was ever captured, so a root that was trusted
+    /// months ago and never used once still reports a real figure.
+    var idleDays: Int?
+    /// The daemon's idleness threshold, in days. `lumen-core` owns the number
+    /// (see `activity.rs`); the app compares against whatever it is told rather
+    /// than keeping a second copy that could drift from it.
+    var idleAdvisoryDays: Int?
+
+    /// Has this trusted certificate gone unused long enough to be worth
+    /// mentioning?
+    ///
+    /// All three fields are optional because the app can attach to an external
+    /// daemon that predates them (see `coreVersion`). A daemon that sends no
+    /// figure gets no advisory: absent has to read as "no opinion", never as
+    /// "idle forever", or every out-of-date daemon would nag about a
+    /// certificate the user is actively using.
+    var isIdle: Bool {
+        guard let idleDays, let idleAdvisoryDays else { return false }
+        return idleDays >= idleAdvisoryDays
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path, subject, issuer
+        case lastCaptureAt = "last_capture_at"
+        case idleDays = "idle_days"
+        case idleAdvisoryDays = "idle_advisory_days"
+    }
 }
 
 struct DGStatus: Codable {
