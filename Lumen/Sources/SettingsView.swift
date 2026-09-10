@@ -385,15 +385,28 @@ struct SettingsView: View {
                 }
             }
 
-            Text(caTrusted
-                 ? "Certificate is trusted. HTTPS proxy mode is active."
-                 : "macOS will ask for your login password once to set trust.")
+            Text(certificateFootnote)
                 .font(.system(size: 9))
                 .foregroundStyle(.white.opacity(0.3))
         }
         // Trigger an out-of-band refresh when the view appears so the badge
         // is current without waiting up to 5 s for the next polling tick.
         .onAppear { apiClient.refreshCATrust() }
+    }
+
+    /// The line under the certificate buttons.
+    ///
+    /// Three states rather than two: claiming proxy mode "is active" directly
+    /// beneath an advisory saying nothing has been captured for months reads as
+    /// a contradiction, and undercuts the advisory it sits below.
+    private var certificateFootnote: String {
+        guard caTrusted else {
+            return "macOS will ask for your login password once to set trust."
+        }
+        if apiClient.caInfo?.isIdle == true {
+            return "Certificate is trusted, but nothing has used it in a while."
+        }
+        return "Certificate is trusted. HTTPS proxy mode is active."
     }
 
     private func trustCA() {
