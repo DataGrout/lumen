@@ -12,6 +12,12 @@
 //! coarsely so it survives daemon restarts, and reported on `/ca/info` for the
 //! app to turn into an advisory next to the button that already does the work.
 //!
+//! A second timestamp, `tracking_since`, records when this install started
+//! watching. Without it, "nothing has ever been captured" and "we only started
+//! counting at upgrade" are the same empty file, and an existing user's first
+//! launch would measure idleness from a years-old CA and offer to remove the
+//! certificate their working setup depends on. See `idle_days`.
+//!
 //! It advises and nothing more. Nothing here deletes a certificate, drops trust,
 //! or changes capture behaviour.
 
@@ -51,6 +57,11 @@ struct ActivityFile {
     /// the field, which reads identically to "nothing has been captured".
     #[serde(default)]
     last_capture_at: Option<i64>,
+    /// Unix seconds of the first startup that kept this bookkeeping. `None` in a
+    /// file written before the field existed, which reads as "we do not know
+    /// when counting began" and simply drops out of the baseline.
+    #[serde(default)]
+    tracking_since: Option<i64>,
 }
 
 /// The last-capture timestamp, in memory and (coarsely) on disk.
@@ -59,6 +70,10 @@ pub struct CaptureActivity {
     /// a sentinel rather than an `Option` so the proxy hot path is a single
     /// relaxed atomic store instead of taking a lock.
     last_capture_at: AtomicI64,
+    /// Unix seconds from which this install has been watching for captures, or
+    /// `0` if that was never recorded. Set once, by `begin_tracking_at`, and
+    /// never moved afterwards.
+    tracking_since: AtomicI64,
     /// Unix seconds of the last write to `path`, or `0` if this process has not
     /// written yet. Drives the debounce.
     last_persisted_at: AtomicI64,
@@ -82,22 +97,47 @@ impl CaptureActivity {
     }
 
     fn open(path: Option<PathBuf>) -> Self {
-        let last = path
+        let file = path
             .as_ref()
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|bytes| serde_json::from_slice::<ActivityFile>(&bytes).ok())
-            .and_then(|file| file.last_capture_at)
-            // A negative or absurdly future timestamp is a corrupt file by
-            // another name; treat it as no record rather than reporting
-            // nonsense idleness.
-            .filter(|ts| *ts > 0)
-            .unwrap_or(0);
+            .unwrap_or_default();
+
+        // A negative or absurdly future timestamp is a corrupt file by another
+        // name; treat it as no record rather than reporting nonsense idleness.
+        let sane = |ts: Option<i64>| ts.filter(|ts| *ts > 0).unwrap_or(0);
 
         Self {
-            last_capture_at: AtomicI64::new(last),
+            last_capture_at: AtomicI64::new(sane(file.last_capture_at)),
+            tracking_since: AtomicI64::new(sane(file.tracking_since)),
             last_persisted_at: AtomicI64::new(0),
             path,
         }
+    }
+
+    /// Record that counting starts now, unless a previous run already recorded
+    /// when it started.
+    ///
+    /// This is what separates "trusted and never used" from "we only started
+    /// looking at upgrade time". Without it, an existing user's first launch on
+    /// a build that has this bookkeeping finds no file, falls back to the CA's
+    /// `notBefore`, and is told their daily-driver certificate has been idle for
+    /// as long as they have had it.
+    ///
+    /// Writing through matters as much as the value: held only in memory, the
+    /// baseline would reset on every daemon restart and the ninety-day window
+    /// would never close for a genuinely abandoned install.
+    pub fn begin_tracking_at(&self, now: i64) {
+        if self
+            .tracking_since
+            .compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            // A previous run already stamped it. Moving it would hand every
+            // restart a fresh ninety days.
+            return;
+        }
+        self.persist(self.last_capture_at.load(Ordering::Relaxed));
     }
 
     /// Note that something was just captured.
@@ -134,6 +174,15 @@ impl CaptureActivity {
         }
     }
 
+    /// Unix seconds from which this install has been watching for captures, or
+    /// `None` if that was never recorded.
+    pub fn tracking_since(&self) -> Option<i64> {
+        match self.tracking_since.load(Ordering::Relaxed) {
+            0 => None,
+            ts => Some(ts),
+        }
+    }
+
     fn persist(&self, ts: i64) {
         let Some(path) = self.path.as_ref() else {
             return;
@@ -142,7 +191,8 @@ impl CaptureActivity {
             let _ = std::fs::create_dir_all(dir);
         }
         let file = ActivityFile {
-            last_capture_at: Some(ts),
+            last_capture_at: (ts > 0).then_some(ts),
+            tracking_since: self.tracking_since(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&file) {
             let _ = std::fs::write(path, json);
@@ -160,8 +210,15 @@ impl CaptureActivity {
 static ACTIVITY: OnceLock<CaptureActivity> = OnceLock::new();
 
 /// Install the disk-backed tracker. Call once at startup, before the proxy runs.
+///
+/// Startup is also where `tracking_since` gets stamped, if no previous run
+/// stamped it already — which covers a first install and an upgrade from a build
+/// that had no activity file with the same line of code, because they present
+/// identically on disk.
 pub fn install() {
-    let _ = ACTIVITY.set(CaptureActivity::load());
+    let activity = CaptureActivity::load();
+    activity.begin_tracking_at(now_unix());
+    let _ = ACTIVITY.set(activity);
 }
 
 /// Note that something was just captured. No-op until `install` has run.
@@ -176,20 +233,48 @@ pub fn last_capture_at() -> Option<i64> {
     ACTIVITY.get().and_then(|a| a.last_capture_at())
 }
 
+/// Unix seconds from which this install has been watching for captures, or
+/// `None` before `install` has run.
+pub fn tracking_since() -> Option<i64> {
+    ACTIVITY.get().and_then(|a| a.tracking_since())
+}
+
 /// Whole days since anything was captured, for `/ca/info`.
 ///
-/// Falls back to the CA's own `notBefore` when nothing has ever been captured.
-/// That fallback is the point of the feature, not a nicety: a root trusted six
-/// months ago and never used once is the clearest case of a certificate the user
-/// has no use for, and reporting `None` there would hide exactly the users worth
-/// telling. `None` is returned only when there is no CA and no capture at all —
-/// nothing was installed, so nothing is owed.
+/// A recorded capture wins outright. With none, the baseline is the later of the
+/// CA's own `notBefore` and the point this install started watching:
+///
+/// - a user upgrading into this bookkeeping starts from the upgrade, not from
+///   the day they trusted the CA, so an active daily user is not told on first
+///   launch that nothing has been captured in years — and their very next call
+///   replaces the baseline with a real capture timestamp anyway;
+/// - a CA minted *after* tracking began — a fresh install that trusts the root
+///   some days later — starts from the CA, which is the more accurate of the two
+///   because nothing could have been captured before it existed;
+/// - an install that really is abandoned fires ninety days after whichever came
+///   later, which is what the advisory is for.
+///
+/// The `notBefore` fallback is the point of the feature, not a nicety: a root
+/// trusted six months ago and never used once is the clearest case of a
+/// certificate the user has no use for. `None` is returned only when there is no
+/// CA and no capture at all — nothing was installed, so nothing is owed, and
+/// `tracking_since` alone is not something to advise removing.
 pub fn idle_days(
     last_capture_at: Option<i64>,
     ca_not_before: Option<i64>,
+    tracking_since: Option<i64>,
     now: i64,
 ) -> Option<i64> {
-    let since = last_capture_at.or(ca_not_before)?;
+    let since = match last_capture_at {
+        Some(captured) => captured,
+        None => {
+            let ca = ca_not_before?;
+            match tracking_since {
+                Some(started) => ca.max(started),
+                None => ca,
+            }
+        }
+    };
     // Clamped at zero: a clock that moved backwards, or the one-hour backdate on
     // a freshly minted CA, must not read as negative idleness.
     Some((now - since).max(0) / SECS_PER_DAY)
@@ -215,16 +300,27 @@ mod tests {
     }
 
     fn read_persisted(path: &PathBuf) -> Option<i64> {
+        read_file(path)?.last_capture_at
+    }
+
+    fn read_tracking_since(path: &PathBuf) -> Option<i64> {
+        read_file(path)?.tracking_since
+    }
+
+    fn read_file(path: &PathBuf) -> Option<ActivityFile> {
         let bytes = std::fs::read(path).ok()?;
-        serde_json::from_slice::<ActivityFile>(&bytes)
-            .ok()?
-            .last_capture_at
+        serde_json::from_slice::<ActivityFile>(&bytes).ok()
     }
 
     #[test]
     fn idle_days_from_a_recent_capture_is_below_the_threshold() {
         let three_days_ago = NOW - 3 * SECS_PER_DAY;
-        let days = idle_days(Some(three_days_ago), Some(NOW - 400 * SECS_PER_DAY), NOW);
+        let days = idle_days(
+            Some(three_days_ago),
+            Some(NOW - 400 * SECS_PER_DAY),
+            Some(NOW - 400 * SECS_PER_DAY),
+            NOW,
+        );
 
         assert_eq!(days, Some(3));
         assert!(
@@ -238,6 +334,7 @@ mod tests {
         let days = idle_days(
             Some(NOW - 200 * SECS_PER_DAY),
             Some(NOW - 400 * SECS_PER_DAY),
+            Some(NOW - 400 * SECS_PER_DAY),
             NOW,
         );
 
@@ -247,26 +344,123 @@ mod tests {
 
     /// The case the feature exists for: trusted long ago, never once used.
     /// Falling back to `None` here would leave that user unwarned forever.
+    ///
+    /// A missing `tracking_since` — a file written before that field existed,
+    /// which no release has produced but which must not misbehave — simply
+    /// drops out and leaves the CA as the baseline.
     #[test]
     fn idle_days_falls_back_to_the_ca_creation_date_when_nothing_was_captured() {
-        let days = idle_days(None, Some(NOW - 180 * SECS_PER_DAY), NOW);
+        let days = idle_days(None, Some(NOW - 180 * SECS_PER_DAY), None, NOW);
 
         assert_eq!(days, Some(180));
         assert!(days.unwrap() >= IDLE_ADVISORY_DAYS);
     }
 
+    /// The upgrade case, and the reason `tracking_since` exists at all.
+    ///
+    /// An existing user's CA can be years old. Before this, their first launch
+    /// on a build with this bookkeeping found no activity file, fell back to
+    /// `notBefore`, and told a user who captures traffic every day that nothing
+    /// had been captured since the day they installed Lumen — offering to remove
+    /// the certificate their working setup depends on.
+    #[test]
+    fn idle_days_on_upgrade_is_measured_from_the_upgrade_not_the_old_ca() {
+        let days = idle_days(None, Some(NOW - 983 * SECS_PER_DAY), Some(NOW), NOW);
+
+        assert_eq!(days, Some(0), "counting starts at the upgrade");
+        assert!(
+            days.unwrap() < IDLE_ADVISORY_DAYS,
+            "an active user must not be offered removal on first launch"
+        );
+    }
+
+    /// Deferring to the upgrade delays the advisory; it must not cancel it. An
+    /// install that has done nothing for ninety days since we started counting
+    /// is exactly the abandoned root this advises on.
+    #[test]
+    fn idle_days_still_fires_ninety_one_days_after_tracking_began() {
+        let tracking_since = NOW - 91 * SECS_PER_DAY;
+        let days = idle_days(
+            None,
+            Some(NOW - 983 * SECS_PER_DAY),
+            Some(tracking_since),
+            NOW,
+        );
+
+        assert_eq!(days, Some(91));
+        assert!(days.unwrap() >= IDLE_ADVISORY_DAYS, "must advise removal");
+    }
+
+    /// The other direction: a fresh install that trusts the root some days
+    /// later. Nothing could have been captured before the CA existed, so the CA
+    /// is the more accurate baseline and the later of the two wins again.
+    #[test]
+    fn idle_days_uses_the_ca_when_it_was_minted_after_tracking_began() {
+        let days = idle_days(
+            None,
+            Some(NOW - 100 * SECS_PER_DAY),
+            Some(NOW - 120 * SECS_PER_DAY),
+            NOW,
+        );
+
+        assert_eq!(
+            days,
+            Some(100),
+            "measured from the CA, the later of the two"
+        );
+    }
+
+    /// A real capture answers the question outright; the two fallbacks are only
+    /// ever guesses at when the window opened.
+    #[test]
+    fn a_recorded_capture_outranks_both_fallbacks() {
+        let captured = NOW - 5 * SECS_PER_DAY;
+
+        for (ca, tracking) in [
+            (Some(NOW - 900 * SECS_PER_DAY), Some(NOW)),
+            (Some(NOW), Some(NOW - 900 * SECS_PER_DAY)),
+            (None, Some(NOW - 900 * SECS_PER_DAY)),
+            (Some(NOW - 900 * SECS_PER_DAY), None),
+            (None, None),
+        ] {
+            assert_eq!(
+                idle_days(Some(captured), ca, tracking, NOW),
+                Some(5),
+                "capture must win over ca={ca:?} tracking={tracking:?}"
+            );
+        }
+    }
+
     #[test]
     fn idle_days_is_none_only_when_there_is_no_ca_and_no_capture() {
-        assert_eq!(idle_days(None, None, NOW), None);
+        assert_eq!(idle_days(None, None, None, NOW), None);
+        // Tracking alone is not a certificate, so there is nothing to advise
+        // removing and still nothing to report.
+        assert_eq!(
+            idle_days(None, None, Some(NOW - 900 * SECS_PER_DAY), NOW),
+            None
+        );
         // A capture with an unreadable CA still yields an answer.
-        assert_eq!(idle_days(Some(NOW - SECS_PER_DAY), None, NOW), Some(1));
+        assert_eq!(
+            idle_days(Some(NOW - SECS_PER_DAY), None, None, NOW),
+            Some(1)
+        );
     }
 
     #[test]
     fn idle_days_never_goes_negative() {
         // A CA backdated for clock skew, and a clock that jumped backwards.
-        assert_eq!(idle_days(None, Some(NOW + 3600), NOW), Some(0));
-        assert_eq!(idle_days(Some(NOW + 10 * SECS_PER_DAY), None, NOW), Some(0));
+        assert_eq!(idle_days(None, Some(NOW + 3600), None, NOW), Some(0));
+        assert_eq!(
+            idle_days(Some(NOW + 10 * SECS_PER_DAY), None, None, NOW),
+            Some(0)
+        );
+        // A tracking stamp from a clock that was ahead, taken as the later of
+        // the two, must not read as negative either.
+        assert_eq!(
+            idle_days(None, Some(NOW - 400 * SECS_PER_DAY), Some(NOW + 3600), NOW),
+            Some(0)
+        );
     }
 
     #[test]
@@ -330,15 +524,114 @@ mod tests {
         assert_eq!(read_persisted(&path), Some(NOW + PERSIST_INTERVAL_SECS));
     }
 
+    /// What `install` does on a first run and on an upgrade — they look the same
+    /// on disk — and the write-through that keeps it from resetting.
+    #[test]
+    fn tracking_since_is_seeded_once_and_survives_a_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".lumen").join("activity.json");
+
+        let first_run = at_path(path.clone());
+        assert_eq!(first_run.tracking_since(), None, "nothing stamped yet");
+
+        first_run.begin_tracking_at(NOW);
+        assert_eq!(first_run.tracking_since(), Some(NOW));
+        assert_eq!(
+            read_tracking_since(&path),
+            Some(NOW),
+            "seeding must write through, or every restart resets the baseline"
+        );
+
+        // Twice in one process is a no-op.
+        first_run.begin_tracking_at(NOW + 30 * SECS_PER_DAY);
+        assert_eq!(first_run.tracking_since(), Some(NOW));
+
+        // And so is a later daemon start, which is the case that matters: a
+        // moving baseline would hand each restart a fresh ninety days and the
+        // advisory would never fire.
+        let after_restart = at_path(path.clone());
+        assert_eq!(after_restart.tracking_since(), Some(NOW));
+        after_restart.begin_tracking_at(NOW + 200 * SECS_PER_DAY);
+        assert_eq!(after_restart.tracking_since(), Some(NOW));
+        assert_eq!(read_tracking_since(&path), Some(NOW));
+    }
+
+    /// Seeding must not invent a capture, and the first real capture must
+    /// replace the baseline without disturbing the stamp.
+    #[test]
+    fn seeding_leaves_the_capture_record_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("activity.json");
+
+        let activity = at_path(path.clone());
+        activity.begin_tracking_at(NOW);
+
+        assert_eq!(activity.last_capture_at(), None);
+        assert_eq!(read_persisted(&path), None, "no capture to claim yet");
+
+        activity.record_at(NOW + 60);
+
+        assert_eq!(read_persisted(&path), Some(NOW + 60));
+        assert_eq!(read_tracking_since(&path), Some(NOW), "stamp is untouched");
+        assert_eq!(
+            idle_days(
+                activity.last_capture_at(),
+                Some(NOW - 983 * SECS_PER_DAY),
+                activity.tracking_since(),
+                NOW + 60
+            ),
+            Some(0),
+            "the real capture takes over from the seeded baseline"
+        );
+    }
+
+    /// A file that predates `tracking_since` but has a capture is taken at face
+    /// value: the capture is the answer and the missing stamp changes nothing.
+    #[test]
+    fn a_file_with_a_capture_but_no_tracking_stamp_is_accepted_as_is() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("activity.json");
+        let captured = NOW - 2 * SECS_PER_DAY;
+        std::fs::write(&path, format!("{{\"last_capture_at\":{captured}}}")).expect("write");
+
+        let activity = at_path(path);
+
+        assert_eq!(activity.last_capture_at(), Some(captured));
+        assert_eq!(activity.tracking_since(), None);
+        assert_eq!(
+            idle_days(
+                activity.last_capture_at(),
+                Some(NOW - 400 * SECS_PER_DAY),
+                activity.tracking_since(),
+                NOW
+            ),
+            Some(2)
+        );
+    }
+
     #[test]
     fn a_missing_file_reads_as_no_capture_recorded() {
         let dir = tempfile::tempdir().expect("tempdir");
         let activity = at_path(dir.path().join("nowhere").join("activity.json"));
 
         assert_eq!(activity.last_capture_at(), None);
+        assert_eq!(activity.tracking_since(), None);
         assert_eq!(
-            idle_days(activity.last_capture_at(), Some(NOW - SECS_PER_DAY), NOW),
+            idle_days(
+                activity.last_capture_at(),
+                Some(NOW - SECS_PER_DAY),
+                activity.tracking_since(),
+                NOW
+            ),
             Some(1)
+        );
+
+        // Seeded as it would be at startup, the missing file is created and the
+        // old CA no longer drives the figure.
+        activity.begin_tracking_at(NOW);
+        assert_eq!(
+            idle_days(None, Some(NOW - 983 * SECS_PER_DAY), Some(NOW), NOW),
+            Some(0)
         );
     }
 
@@ -357,6 +650,13 @@ mod tests {
             ("negative.json", "{\"last_capture_at\":-5}"),
             ("zeroed.json", "{\"last_capture_at\":0}"),
             ("unrelated_shape.json", "[1,2,3]"),
+            ("bad_tracking.json", "{\"tracking_since\":-5}"),
+            ("zeroed_tracking.json", "{\"tracking_since\":0}"),
+            ("wrong_tracking_type.json", "{\"tracking_since\":\"today\"}"),
+            (
+                "both_bad.json",
+                "{\"last_capture_at\":-1,\"tracking_since\":-1}",
+            ),
         ] {
             let path = dir.path().join(name);
             std::fs::write(&path, contents).expect("write");
@@ -367,6 +667,27 @@ mod tests {
                 None,
                 "{name} should read as no record"
             );
+            assert_eq!(
+                activity.tracking_since(),
+                None,
+                "{name} should read as no tracking stamp"
+            );
+
+            // Unreadable bookkeeping must never manufacture an advisory: seeded
+            // at startup as it would be, the baseline is now, not an old CA.
+            activity.begin_tracking_at(NOW);
+            let days = idle_days(
+                activity.last_capture_at(),
+                Some(NOW - 983 * SECS_PER_DAY),
+                activity.tracking_since(),
+                NOW,
+            );
+            assert_eq!(days, Some(0), "{name} must not advise removal");
+            assert_eq!(
+                read_tracking_since(&path),
+                Some(NOW),
+                "{name} tracking stamp should be repaired"
+            );
 
             // And it recovers: the next capture overwrites the bad file.
             activity.record_at(NOW);
@@ -375,6 +696,7 @@ mod tests {
                 Some(NOW),
                 "{name} should be repaired"
             );
+            assert_eq!(read_tracking_since(&path), Some(NOW));
         }
     }
 
@@ -384,9 +706,11 @@ mod tests {
     fn no_writable_path_still_tracks_in_memory() {
         let activity = CaptureActivity::open(None);
 
+        activity.begin_tracking_at(NOW);
         activity.record_at(NOW);
 
         assert_eq!(activity.last_capture_at(), Some(NOW));
+        assert_eq!(activity.tracking_since(), Some(NOW));
     }
 
     /// Recording before `install` must not write anything, which is what keeps
@@ -398,5 +722,6 @@ mod tests {
         // this can assert is that calling it does not panic.
         record_capture();
         let _ = last_capture_at();
+        let _ = tracking_since();
     }
 }

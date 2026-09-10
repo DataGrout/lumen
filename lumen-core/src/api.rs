@@ -488,14 +488,17 @@ async fn handle_api_request(
             };
             let not_after = state.ca.not_after().and_then(unix_secs);
 
-            // How long this trusted root has been sitting unused. Measured from
-            // the CA's own notBefore when nothing was ever captured, so a
+            // How long this trusted root has been sitting unused. With no
+            // capture on record it is measured from the later of the CA's own
+            // notBefore and the point this install started watching, so a
             // certificate trusted months ago and never used once still reports a
-            // real figure instead of nothing at all.
+            // real figure, while a user upgrading into the bookkeeping is not
+            // charged for the months before it existed.
             let last_capture_at = crate::activity::last_capture_at();
             let idle_days = crate::activity::idle_days(
                 last_capture_at,
                 state.ca.not_before().and_then(unix_secs),
+                crate::activity::tracking_since(),
                 chrono::Utc::now().timestamp(),
             );
 
