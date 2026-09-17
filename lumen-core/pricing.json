@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
-  "updated": "2026-09-01",
+  "updated": "2026-09-17",
   "notes": {
     "cursor": "Cursor On-Demand effective blended rates, NOT Anthropic/OpenAI direct prices. Cursor caches conversation context very aggressively (>85% hit rate typical), and its binary protobuf responses do not expose cache_read_input_tokens the way the Anthropic JSON API does. BidiAppend calls carrying conversation history are filtered as proxy noise, so byte-estimated tokens are heavily skewed toward output_tokens. These rates are calibrated against observed Cursor On-Demand invoices to land within ~2x of actual billing. If Cursor ever exposes cache-aware token counts in its gRPC responses, raise these toward the underlying Anthropic/OpenAI direct rates.",
     "retired": "Model has been retired from the OpenAI product and/or API. Entries are kept for cost attribution of historical traffic. o1-preview shutdown 2025-07-28; o1-mini shutdown 2025-10-27; entire o-series retired from ChatGPT 2026-02-13 (API access may still function for existing integrations).",
     "openai_5_6_cut": "2026-07-30: OpenAI cut gpt-5.6-luna and gpt-5.6-terra by up to 80%. Luna 1.00/6.00 -> 0.20/1.20, Terra 2.50/15.00 -> 2.00/12.00. Verified against the OpenAI pricing page on 2026-07-31.",
-    "gemini_promotional": "Gemini 3.6/3.7 Flash and 3 Flash Preview carry promotional rates through 2026-12-31; input/output/cache all DOUBLE on 2027-01-01 (3.6/3.7 Flash -> 1.50/7.50/0.15). Re-check this file in January 2027.",
+    "openai_5_6_sol_promotional": "gpt-5.6-sol's 4.00/20.00/0.40 is promotional pricing, stated on the OpenAI pricing page as available AT LEAST through 2026-11-21. No successor rate is published, so this is a re-check date, not a scheduled increase. Verified 2026-09-17.",
+    "gemini_promotional": "Gemini 3.6/3.7/3.8 Flash and 3 Flash Preview carry promotional rates through 2026-12-31; input/output/cache all DOUBLE on 2027-01-01 (3.6/3.7/3.8 Flash -> 1.50/7.50/0.15). Re-check this file in January 2027.",
     "claude_sonnet_5": "Claude Sonnet 5 launched at an introductory $2/$10 through 2026-08-31. Anthropic has since made that the standard price and cancelled the planned rise to $3/$15, so 2.00/10.00 is simply the rate now.",
     "unpriced_variants": "Dated aliases (claude-haiku-4-5-20251001, gpt-4o-2024-08-06, ...) and retired models are kept deliberately: the API reports those ids, and historical events must keep repricing correctly. Removing them sends old traffic to the $5/$15 unknown-model fallback.",
     "claude_51_cache_read": "Claude Fable 5.1 and Mythos 5.1 price cache reads at 0.025x base input ($0.25/MTok), not the 0.1x every other Claude model uses. Verified against the Anthropic pricing page 2026-09-01. Do not 'correct' these to $1.00 to match Fable 5 / Mythos 5 \u2014 the difference is deliberate and fourfold on the cache line, which dominates an agent workload.",
@@ -429,6 +430,13 @@
     },
     {
       "provider": "google",
+      "model": "gemini-3.8-flash",
+      "input_per_mtok": 0.75,
+      "output_per_mtok": 3.75,
+      "cache_read_per_mtok": 0.075
+    },
+    {
+      "provider": "google",
       "model": "gemini-omni-1.1-flash",
       "input_per_mtok": 1.5,
       "output_per_mtok": 9.0
@@ -682,6 +690,13 @@
       "input_per_mtok": 2.0,
       "output_per_mtok": 12.0,
       "cache_read_per_mtok": 0.2
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "input_per_mtok": 10.0,
+      "output_per_mtok": 50.0,
+      "cache_read_per_mtok": 1.0
     },
     {
       "provider": "openai",

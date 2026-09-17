@@ -114,6 +114,11 @@ impl PricingDatabase {
             models: HashMap::new(),
         };
 
+        // GPT-6 family (2026-09). Astra is the frontier tier; at $10/$50 it is
+        // 2.5x sol, so leaving it unpriced costs more than the usual fallback
+        // error — the $5/$15 unknown-model rate understates it on both legs.
+        db.add("openai", "gpt-6-astra", 10.00, 50.00, Some(1.00), None);
+
         // GPT-5.x family (released 2025-2026)
         // All use 10% cached-input rate. -pro variants must be explicit so they
         // aren't fuzzy-matched down to the base model's much cheaper rate.
@@ -421,6 +426,7 @@ impl PricingDatabase {
         // Promotional pricing through 2026-12-31; every rate DOUBLES on 2027-01-01
         // (1.50 / 7.50 / 0.15). A static default cannot time-gate, so this needs
         // revisiting in January — see the `gemini_promotional` note in pricing.json.
+        db.add("google", "gemini-3.8-flash", 0.75, 3.75, Some(0.075), None);
         db.add("google", "gemini-3.6-flash", 0.75, 3.75, Some(0.075), None);
         db.add("google", "gemini-3.5-flash", 1.50, 9.00, Some(0.15), None);
         db.add(
@@ -1241,7 +1247,9 @@ mod tests {
             (LLMProvider::Anthropic, "claude-opus-5", 5.00, 25.00),
             (LLMProvider::Anthropic, "claude-mythos-5", 10.00, 50.00),
             (LLMProvider::Anthropic, "claude-mythos-5-1", 10.00, 50.00),
+            (LLMProvider::OpenAI, "gpt-6-astra", 10.00, 50.00),
             (LLMProvider::Google, "gemini-3.1-pro-preview", 2.00, 12.00),
+            (LLMProvider::Google, "gemini-3.8-flash", 0.75, 3.75),
             (LLMProvider::Google, "gemini-3.6-flash", 0.75, 3.75),
             (LLMProvider::Google, "gemini-3.5-flash", 1.50, 9.00),
             (LLMProvider::Google, "gemini-3.5-flash-lite", 0.30, 2.50),
@@ -1260,6 +1268,26 @@ mod tests {
                 (cost.output_cost - exp_out).abs() < 0.01,
                 "{model}: expected ${exp_out} output, got {}",
                 cost.output_cost
+            );
+        }
+    }
+
+    #[test]
+    fn test_2026_09_additions_cache_lines() {
+        // Input/output are pinned above; this pins the cache-read leg, which is
+        // where agent traffic actually spends. A guard call carrying a 150k-token
+        // cached prefix costs ~350x its visible input, so a wrong or absent
+        // cache_read rate is the expensive mistake, not a wrong input rate.
+        let db = PricingDatabase::with_defaults();
+        for (provider, model, exp_cache_read) in [
+            (LLMProvider::OpenAI, "gpt-6-astra", 1.00_f64),
+            (LLMProvider::Google, "gemini-3.8-flash", 0.075),
+        ] {
+            let cached = db.calculate_cost(provider, model, 1_000_000, 0, Some(1_000_000), None);
+            assert!(
+                (cached.total_cost - exp_cache_read).abs() < 0.001,
+                "{model}: expected ${exp_cache_read} for 1M cache reads, got {}",
+                cached.total_cost
             );
         }
     }
