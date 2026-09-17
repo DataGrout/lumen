@@ -190,10 +190,7 @@ impl LumenProxy {
             .map(|s| s.to_string())
             .collect();
 
-        let http_client = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .expect("failed to build HTTP client");
+        let http_client = build_upstream_client();
 
         Self {
             aggregator,
@@ -449,17 +446,16 @@ impl LumenProxy {
             None
         };
 
-        let method_str = parts.method.as_str();
-        let mut builder = match method_str {
-            "POST" => self.http_client.post(&url_str),
-            "GET" => self.http_client.get(&url_str),
-            "PUT" => self.http_client.put(&url_str),
-            "DELETE" => self.http_client.delete(&url_str),
-            "PATCH" => self.http_client.patch(&url_str),
-            _ => self.http_client.get(&url_str),
-        };
+        // The method is forwarded as it arrived. The old match fell through to GET
+        // for anything it did not name, so a preflight went upstream as a GET and a
+        // HEAD came back with a body — the request succeeded and the page broke,
+        // which is worse than an error.
+        let mut builder = self.http_client.request(parts.method.clone(), &url_str);
 
         for (name, value) in parts.headers.iter() {
+            if is_hop_by_hop(name.as_str()) {
+                continue;
+            }
             if is_relay && name == "host" {
                 continue;
             }
@@ -547,9 +543,15 @@ impl LumenProxy {
                                             }
                                             caps.push("cost".to_string());
                                             let m = model_owned.as_deref().unwrap_or("unknown");
-                                            proxy
-                                                .aggregator
-                                                .record_usage(provider, m, &url_owned, parser::TokenUsage { fast: fast_owned, ..usage });
+                                            proxy.aggregator.record_usage(
+                                                provider,
+                                                m,
+                                                &url_owned,
+                                                parser::TokenUsage {
+                                                    fast: fast_owned,
+                                                    ..usage
+                                                },
+                                            );
                                             early_caps = Some(caps);
                                         }
                                     }
@@ -592,9 +594,15 @@ impl LumenProxy {
                                     }
                                     caps.push("cost".to_string());
                                     let m = model_owned.as_deref().unwrap_or("unknown");
-                                    proxy
-                                        .aggregator
-                                        .record_usage(provider, m, &url_owned, parser::TokenUsage { fast: fast_owned, ..usage });
+                                    proxy.aggregator.record_usage(
+                                        provider,
+                                        m,
+                                        &url_owned,
+                                        parser::TokenUsage {
+                                            fast: fast_owned,
+                                            ..usage
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -619,7 +627,9 @@ impl LumenProxy {
                 let stream_body = StreamBody::new(ReceiverStream::new(rx));
                 let mut response = Response::builder().status(status);
                 for (name, value) in resp_headers.iter() {
-                    if name == "content-length" {
+                    // The body is re-framed on the way out, so the upstream's
+                    // framing headers describe a message that no longer exists.
+                    if name == "content-length" || is_hop_by_hop(name.as_str()) {
                         continue;
                     }
                     response = response.header(name, value);
@@ -644,12 +654,18 @@ impl LumenProxy {
                     latency_ms,
                 });
 
-                warn!("Upstream request failed: {}", e);
+                let detail = describe_error(&e);
+                warn!("Upstream request to {} failed: {}", host, detail);
                 Ok(Response::builder()
                     .status(502)
+                    .header("content-type", "text/plain; charset=utf-8")
                     .body(box_body(Full::new(Bytes::from(format!(
-                        "Lumen proxy error: {}",
-                        e
+                        "Lumen proxy error: {detail}\n\n\
+                         This is the upstream request failing, not Lumen refusing it — \
+                         Lumen does not block plain HTTP or any host. A name that does \
+                         not resolve reads as a dns error here.\n\
+                         To check whether Lumen is involved, turn the proxy off and load \
+                         the page again.\n"
                     )))))
                     .unwrap())
             }
@@ -933,17 +949,16 @@ impl LumenProxy {
             }
         }
 
-        let method_str = parts.method.as_str();
-        let mut builder = match method_str {
-            "POST" => self.http_client.post(&upstream_url),
-            "GET" => self.http_client.get(&upstream_url),
-            "PUT" => self.http_client.put(&upstream_url),
-            "DELETE" => self.http_client.delete(&upstream_url),
-            "PATCH" => self.http_client.patch(&upstream_url),
-            _ => self.http_client.get(&upstream_url),
-        };
+        // Forwarded as it arrived — see the plain-HTTP path for why the GET
+        // fallback was worse than an error.
+        let mut builder = self
+            .http_client
+            .request(parts.method.clone(), &upstream_url);
 
         for (name, value) in parts.headers.iter() {
+            if is_hop_by_hop(name.as_str()) {
+                continue;
+            }
             if name == "host" || name == "accept-encoding" {
                 continue;
             }
@@ -1024,7 +1039,15 @@ impl LumenProxy {
                                             }
                                             caps.push("cost".to_string());
                                             let m = model_owned.as_deref().unwrap_or("unknown");
-                                            proxy.aggregator.record_usage(p, m, &url_owned, parser::TokenUsage { fast: fast_owned, ..usage });
+                                            proxy.aggregator.record_usage(
+                                                p,
+                                                m,
+                                                &url_owned,
+                                                parser::TokenUsage {
+                                                    fast: fast_owned,
+                                                    ..usage
+                                                },
+                                            );
                                             early_caps = Some(caps);
                                         }
                                     }
@@ -1218,7 +1241,10 @@ impl LumenProxy {
                                         provider,
                                         &final_model,
                                         &url_owned,
-                                        parser::TokenUsage { fast: fast_owned, ..usage },
+                                        parser::TokenUsage {
+                                            fast: fast_owned,
+                                            ..usage
+                                        },
                                     );
                                 }
                             }
@@ -1246,8 +1272,10 @@ impl LumenProxy {
 
                 let mut response = Response::builder().status(status);
                 for (name, value) in resp_headers.iter() {
-                    if name == "content-length" {
-                        continue; // don't forward content-length for streamed responses
+                    // Body is re-framed on the way out; the upstream's framing
+                    // headers describe a message that no longer exists.
+                    if name == "content-length" || is_hop_by_hop(name.as_str()) {
+                        continue;
                     }
                     response = response.header(name, value);
                 }
@@ -1271,17 +1299,95 @@ impl LumenProxy {
                     latency_ms,
                 });
 
-                warn!("MITM upstream request to {} failed: {}", upstream_addr, e);
+                let detail = describe_error(&e);
+                warn!(
+                    "MITM upstream request to {} failed: {}",
+                    upstream_addr, detail
+                );
                 Ok(Response::builder()
                     .status(502)
+                    .header("content-type", "text/plain; charset=utf-8")
                     .body(box_body(Full::new(Bytes::from(format!(
-                        "Lumen proxy error: {}",
-                        e
+                        "Lumen proxy error: {detail}\n\n\
+                         This is the upstream request failing, not Lumen refusing it — \
+                         Lumen does not block any host. A name that does not resolve \
+                         reads as a dns error here.\n\
+                         To check whether Lumen is involved, turn the proxy off and load \
+                         the page again.\n"
                     )))))
                     .unwrap())
             }
         }
     }
+}
+
+/// The client every upstream request goes through.
+///
+/// Extracted so the policy is testable rather than asserted about — the redirect
+/// setting in particular is the difference between a proxy and a fetcher.
+fn build_upstream_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        // A forward proxy hands the 3xx back; it does not chase it. Following
+        // redirects meant the browser was shown the *destination's* body under the
+        // *original* URL: an http:// site redirecting to https:// rendered as a 200
+        // with the address bar still on http and still marked Not Secure, so
+        // absolute links, cookies and mixed-content rules all resolved against the
+        // wrong origin. Only the client knows its own security context, so the
+        // decision is the client's to make.
+        .redirect(reqwest::redirect::Policy::none())
+        // Only the connect phase is bounded. A total timeout would cut off streaming
+        // responses, which is most of what this proxy exists to watch — an SSE
+        // completion legitimately stays open for minutes.
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("failed to build HTTP client")
+}
+
+/// Headers that belong to one hop and must not be forwarded to the origin.
+///
+/// RFC 9110 §7.6.1, plus the non-standard `proxy-connection` browsers still send.
+/// Forwarding these is a protocol violation: `transfer-encoding` describes framing
+/// this proxy has already undone and re-does itself, and an origin handed a
+/// `proxy-connection` or a stale `connection` from the browser is entitled to
+/// reject the request — which is one way a site breaks through the proxy and
+/// nowhere else.
+const HOP_BY_HOP: [&str; 9] = [
+    "connection",
+    "proxy-connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+];
+
+fn is_hop_by_hop(name: &str) -> bool {
+    HOP_BY_HOP.iter().any(|h| name.eq_ignore_ascii_case(h))
+}
+
+/// An error plus everything underneath it.
+///
+/// `reqwest::Error`'s own `Display` is just "error sending request for url (…)" —
+/// it deliberately omits the source, so a domain that does not exist, a refused
+/// connection, a TLS handshake failure and a timeout all render as the same
+/// sentence. That is the whole reason a dead link looks like a proxy fault: the
+/// one fact worth having is the one being dropped.
+fn describe_error(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut source = e.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        // Skip a link that only repeats its parent, which the io/hyper chain does.
+        if !out.ends_with(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        source = cause.source();
+    }
+    out
 }
 
 /// Find the largest valid char boundary at or before `index`.
@@ -1320,6 +1426,144 @@ mod tests {
         let sc = Arc::new(SampleCapture::new(5));
         let bl = Arc::new(RwLock::new(BodyLimits::default()));
         LumenProxy::new(agg, tl, cc, sc, bl, 0)
+    }
+
+    // ─── Forward-proxy correctness ───────────────────────────────────────────
+
+    #[test]
+    fn describe_error_includes_the_cause_not_just_the_summary() {
+        // A request error's own Display names the URL and drops the source, which
+        // makes an unresolvable name, a refused connection and a TLS failure all
+        // read identically.
+        #[derive(Debug)]
+        struct Inner;
+        impl std::fmt::Display for Inner {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "dns error: failed to lookup address information")
+            }
+        }
+        impl std::error::Error for Inner {}
+
+        #[derive(Debug)]
+        struct Outer(Inner);
+        impl std::fmt::Display for Outer {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "error sending request for url (http://host.invalid/)")
+            }
+        }
+        impl std::error::Error for Outer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let text = describe_error(&Outer(Inner));
+        assert!(text.contains("error sending request for url"));
+        assert!(text.contains("dns error"), "the cause is the point: {text}");
+    }
+
+    #[test]
+    fn describe_error_does_not_repeat_a_cause_its_parent_already_states() {
+        #[derive(Debug)]
+        struct Leaf;
+        impl std::fmt::Display for Leaf {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "connection refused")
+            }
+        }
+        impl std::error::Error for Leaf {}
+
+        #[derive(Debug)]
+        struct Wrapper(Leaf);
+        impl std::fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "tcp connect error: connection refused")
+            }
+        }
+        impl std::error::Error for Wrapper {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        assert_eq!(
+            describe_error(&Wrapper(Leaf)),
+            "tcp connect error: connection refused"
+        );
+    }
+
+    #[test]
+    fn hop_by_hop_headers_are_recognised_whatever_their_case() {
+        for h in [
+            "connection",
+            "Proxy-Connection",
+            "KEEP-ALIVE",
+            "Transfer-Encoding",
+            "upgrade",
+            "te",
+            "trailer",
+            "proxy-authenticate",
+            "proxy-authorization",
+        ] {
+            assert!(is_hop_by_hop(h), "{h} must not reach the origin");
+        }
+    }
+
+    #[test]
+    fn end_to_end_headers_are_left_alone() {
+        // The filter has to stay narrow. Dropping any of these would break far more
+        // than it fixed — `authorization` above all, which is what the monitored
+        // calls authenticate with.
+        for h in [
+            "authorization",
+            "x-api-key",
+            "content-type",
+            "content-length",
+            "user-agent",
+            "accept",
+            "cookie",
+            "anthropic-version",
+        ] {
+            assert!(!is_hop_by_hop(h), "{h} must be forwarded");
+        }
+    }
+
+    #[tokio::test]
+    async fn upstream_client_returns_the_redirect_instead_of_following_it() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // A real socket on loopback, so this exercises the built client's policy
+        // rather than restating it. Nothing leaves the machine.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 301 Moved Permanently\r\n\
+                          Location: https://elsewhere.invalid/moved\r\n\
+                          Content-Length: 0\r\n\r\n",
+                    )
+                    .await;
+            }
+        });
+
+        let resp = build_upstream_client()
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect("request reached the loopback server");
+
+        // Following it would yield a 200 (or a failure against the unresolvable
+        // Location) and hide the redirect from the client.
+        assert_eq!(resp.status().as_u16(), 301);
+        assert_eq!(
+            resp.headers().get("location").unwrap(),
+            "https://elsewhere.invalid/moved"
+        );
     }
 
     #[test]
