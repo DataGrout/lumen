@@ -125,7 +125,7 @@ function Remove-LumenTrust([string]$CaFile) {
 # on the account pointed at a port with nothing behind it, which looks like the
 # machine is broken and survives reboots, uninstalls and restarts of the client.
 #
-# Ownership is matched on the value, not just the name — the same rule the macOS
+# Ownership is matched on the value, not just the name - the same rule the macOS
 # side applies to the system proxy. A user's own corporate or debugging proxy
 # must never be collateral of stopping ours.
 function Clear-LumenProxyEnv([string]$CaFile) {
