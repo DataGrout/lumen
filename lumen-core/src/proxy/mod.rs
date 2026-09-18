@@ -112,6 +112,9 @@ pub struct LumenProxy {
     relay_routes: RwLock<HashMap<String, String>>,
     sample_capture: Arc<SampleCapture>,
     body_limits: Arc<RwLock<BodyLimits>>,
+    /// Whether upstream requests are getting through, fed by every forwarded
+    /// request on both paths. Read by /health.
+    upstream_health: Arc<crate::upstream_health::UpstreamHealth>,
     /// Whether the "CA expired, capture paused" warning has already been logged.
     ca_warned: std::sync::atomic::AtomicBool,
     /// Last successfully extracted model name from a Cursor request.
@@ -178,6 +181,7 @@ impl LumenProxy {
         cert_cache: Arc<CertCache>,
         sample_capture: Arc<SampleCapture>,
         body_limits: Arc<RwLock<BodyLimits>>,
+        upstream_health: Arc<crate::upstream_health::UpstreamHealth>,
         port: u16,
     ) -> Self {
         let mut hosts = HashSet::new();
@@ -203,6 +207,7 @@ impl LumenProxy {
             relay_routes: RwLock::new(default_routes()),
             sample_capture,
             body_limits,
+            upstream_health,
             ca_warned: std::sync::atomic::AtomicBool::new(false),
             cursor_last_model: RwLock::new(None),
         }
@@ -486,6 +491,10 @@ impl LumenProxy {
 
         match builder.send().await {
             Ok(resp) => {
+                // Any response counts, including a 500: the question this answers
+                // is whether bytes move through the proxy, not whether the origin
+                // is happy about them.
+                self.upstream_health.record_success();
                 let status = resp.status().as_u16();
                 let resp_headers = resp.headers().clone();
 
@@ -655,6 +664,7 @@ impl LumenProxy {
                 });
 
                 let detail = describe_error(&e);
+                self.upstream_health.record_failure(&detail);
                 warn!("Upstream request to {} failed: {}", host, detail);
                 Ok(Response::builder()
                     .status(502)
@@ -977,6 +987,7 @@ impl LumenProxy {
 
         match builder.send().await {
             Ok(resp) => {
+                self.upstream_health.record_success();
                 let status = resp.status().as_u16();
                 let resp_headers = resp.headers().clone();
                 let resp_headers_for_task = resp_headers.clone();
@@ -1300,6 +1311,7 @@ impl LumenProxy {
                 });
 
                 let detail = describe_error(&e);
+                self.upstream_health.record_failure(&detail);
                 warn!(
                     "MITM upstream request to {} failed: {}",
                     upstream_addr, detail
@@ -1425,7 +1437,15 @@ mod tests {
         let cc = Arc::new(CertCache::new(ca));
         let sc = Arc::new(SampleCapture::new(5));
         let bl = Arc::new(RwLock::new(BodyLimits::default()));
-        LumenProxy::new(agg, tl, cc, sc, bl, 0)
+        LumenProxy::new(
+            agg,
+            tl,
+            cc,
+            sc,
+            bl,
+            Arc::new(crate::upstream_health::UpstreamHealth::new()),
+            0,
+        )
     }
 
     // ─── Forward-proxy correctness ───────────────────────────────────────────

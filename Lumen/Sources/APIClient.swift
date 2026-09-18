@@ -106,10 +106,20 @@ struct HealthResponse: Codable {
     var status: String
     var version: String
     var proxyRunning: Bool
+    /// A sustained run of upstream failures with nothing getting through. The
+    /// proxy is in the path of every request on this machine, so this is the
+    /// difference between "Lumen is capturing" and "Lumen is the reason nothing
+    /// loads". Optional: an older daemon predates the field.
+    var upstreamDegraded: Bool?
+    var upstreamLastError: String?
+    var upstreamFailures: Int?
 
     enum CodingKeys: String, CodingKey {
         case status, version
         case proxyRunning = "proxy_running"
+        case upstreamDegraded = "upstream_degraded"
+        case upstreamLastError = "upstream_last_error"
+        case upstreamFailures = "upstream_failures"
     }
 }
 
@@ -294,6 +304,12 @@ final class APIClient {
     /// Version reported by the running lumen-core daemon (from /health). May
     /// differ from the Swift app version if an external/older daemon is attached.
     var coreVersion: String?
+    /// Nothing is getting through the proxy. Drives the amber menu-bar icon and
+    /// the popover banner offering the way out.
+    var upstreamDegraded = false
+    /// Why, in the daemon's words, so the banner can say it rather than only
+    /// that something is wrong.
+    var upstreamLastError: String?
     /// Whether the Lumen CA is trusted in the user's login keychain. Refreshed
     /// every ~5 s on a background queue (see refreshCATrust), so the right-click
     /// menu and Settings view can read it instantly without blocking on a
@@ -403,8 +419,20 @@ final class APIClient {
     func fetchHealth() async {
         guard let data = await get("/health") else { return }
         if let decoded = try? JSONDecoder().decode(HealthResponse.self, from: data) {
-            await MainActor.run { coreVersion = decoded.version }
+            await MainActor.run {
+                coreVersion = decoded.version
+                upstreamDegraded = decoded.upstreamDegraded ?? false
+                upstreamLastError = decoded.upstreamLastError
+            }
         }
+    }
+
+    /// Forget the upstream failure streak and re-poll. Behind "Try again": the
+    /// user has changed something and wants a fresh verdict rather than waiting
+    /// for the old one to decay.
+    func resetUpstreamHealth() async {
+        _ = await post("/proxy/health/reset", body: nil)
+        await fetchHealth()
     }
 
     func fetchDGConfig() async {

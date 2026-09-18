@@ -289,6 +289,9 @@ pub struct AppState {
     pub api_port: RwLock<u16>,
     /// Shared body size limits — written by the API, read by both proxy types.
     pub body_limits: Arc<RwLock<BodyLimits>>,
+    /// Whether upstream requests are getting through. Read by /health so the
+    /// UI can stop the proxy holding the machine when it cannot serve.
+    pub upstream_health: Arc<crate::upstream_health::UpstreamHealth>,
 }
 
 impl AppState {
@@ -363,6 +366,7 @@ impl AppState {
             dcr_flow: Arc::new(RwLock::new(None)),
             api_port: RwLock::new(9091),
             body_limits: Arc::new(RwLock::new(BodyLimits::default())),
+            upstream_health: Arc::new(crate::upstream_health::UpstreamHealth::new()),
         }
     }
 }

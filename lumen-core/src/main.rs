@@ -16,6 +16,7 @@ mod tls;
 mod traffic;
 #[cfg(target_os = "macos")]
 mod transparent;
+mod upstream_health;
 
 use state::AppState;
 use std::sync::Arc;
@@ -159,6 +160,7 @@ async fn main() {
             proxy_state.cert_cache.clone(),
             proxy_state.sample_capture.clone(),
             proxy_state.body_limits.clone(),
+            proxy_state.upstream_health.clone(),
             port,
         ));
         let proxy_clone = proxy.clone();

@@ -299,6 +299,9 @@ struct PopoverView: View {
                 if !apiClient.connected || !apiClient.proxyConfig.running {
                     captureBanner
                 }
+                if apiClient.upstreamDegraded {
+                    upstreamDegradedBanner
+                }
                 if apiClient.dgStatus?.isExpiredSession == true {
                     dgExpiredBanner
                 }
@@ -324,6 +327,84 @@ struct PopoverView: View {
     // Shown on Monitor when the DG identity cert has expired and sync has
     // fallen back to the sync-token bearer. "Reconnect" jumps to Settings →
     // DataGrout, where the actual OAuth reconnect lives.
+    /// Nothing is getting through the proxy.
+    ///
+    /// The loudest banner there is, because the failure is not Lumen's alone:
+    /// the system proxy points every client on the machine at this daemon, so
+    /// while this is up, browsers and agents are failing too and the cause is
+    /// not visible from any of them. It says what broke, and offers the exit.
+    private var upstreamDegradedBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Nothing is getting through")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Text("Requests through Lumen are failing, so apps pointed at it will fail too. Capture has not been switched off — Lumen has only stopped re-applying the system proxy.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+
+            if let detail = apiClient.upstreamLastError {
+                Text(detail)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.orange.opacity(0.7))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+
+            HStack(spacing: 8) {
+                Button(action: {
+                    Task {
+                        let cleared = await SystemProxy.disableOurProxyEverywhere(
+                            port: apiClient.proxyConfig.port
+                        )
+                        NSLog("[Lumen] Took the proxy out of the path on: %@",
+                              cleared.joined(separator: ", "))
+                        UserDefaults.standard.set(false, forKey: "lumen.autoEnableProxy")
+                        await apiClient.resetUpstreamHealth()
+                    }
+                }) {
+                    Text("Take Lumen out of the path")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(.orange.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+
+                Button(action: { Task { await apiClient.resetUpstreamHealth() } }) {
+                    Text("Try again")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+            }
+
+            // Apps already running keep whatever proxy they started with, and
+            // nothing outside their process can change it. Saying so is the
+            // difference between "restart Claude" and another hour spent on
+            // Lumen, the network and the client in turn.
+            Text("Apps already running may need restarting — a process keeps the proxy settings it launched with.")
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.35))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.orange.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.orange.opacity(0.35), lineWidth: 1))
+    }
+
     private var dgExpiredBanner: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.lock.fill")

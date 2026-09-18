@@ -174,6 +174,7 @@ async fn handle_api_request(
                     state.cert_cache.clone(),
                     state.sample_capture.clone(),
                     state.body_limits.clone(),
+                    state.upstream_health.clone(),
                     port,
                 ));
                 let proxy_clone = proxy.clone();
@@ -189,6 +190,14 @@ async fn handle_api_request(
 
                 json_response(StatusCode::OK, &state.proxy_config.read().clone())
             }
+        }
+
+        // Forget the failure streak so the next verdict is earned fresh. The UI
+        // calls this behind "try again" — the user has changed something (dropped
+        // a VPN, moved network) and wants a new answer, not the old one decaying.
+        (Method::POST, "/proxy/health/reset") => {
+            state.upstream_health.reset();
+            json_response(StatusCode::OK, &serde_json::json!({"ok": true}))
         }
 
         (Method::GET, "/proxy/config") => {
@@ -631,6 +640,14 @@ async fn handle_api_request(
                 "version": env!("CARGO_PKG_VERSION"),
                 "proxy_running": state.proxy_config.read().running,
                 "transparent_enabled": state.transparent_config.read().enabled,
+                // The proxy is in the path of every request on this machine and a
+                // watchdog re-asserts it; when it cannot carry traffic, saying so
+                // is what lets the UI offer the way out instead of leaving the
+                // user to guess between Lumen, the network and their client.
+                "upstream_degraded": state.upstream_health.degraded(),
+                "upstream_failures": state.upstream_health.consecutive_failures(),
+                "upstream_last_error": state.upstream_health.last_error(),
+                "upstream_last_success_ago_secs": state.upstream_health.last_success_ago_secs(),
             }),
         ),
 

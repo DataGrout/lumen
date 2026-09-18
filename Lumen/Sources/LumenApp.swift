@@ -136,8 +136,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func startProxyWatchdog(port: Int) {
         proxyWatchdog?.invalidate()
 
-        proxyWatchdog = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: true) { _ in
+        proxyWatchdog = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: true) { [weak self] _ in
             guard UserDefaults.standard.bool(forKey: "lumen.autoEnableProxy") else { return }
+
+            // Nothing is getting through, so stop putting ourselves back in the
+            // path. This loop used to re-apply the proxy unconditionally every
+            // twenty seconds, which meant a daemon that could not carry traffic
+            // took the whole machine down and then undid every attempt to
+            // recover: clearing the proxy by hand did not survive the next tick,
+            // and restarting Lumen only re-established the same broken state.
+            //
+            // Re-asserting is not withdrawn here — an existing setting is left
+            // alone, because silently dropping capture is its own surprise. The
+            // menu-bar icon goes amber and the popover offers the way out.
+            if self?.apiClient?.upstreamDegraded == true {
+                NSLog("[Lumen] Upstream degraded — not re-applying the system proxy")
+                return
+            }
 
             // Off the main thread, always.
             //
