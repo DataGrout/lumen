@@ -18,6 +18,23 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
+// ─── Quick Connect ───────────────────────────────────────────────────────────
+
+/// The gateway. DCR registration (`/register`), authorization (`/oauth/authorize`),
+/// token exchange (`/oauth/token`) and `bootstrap_identity` all hang off this root —
+/// confirmed against the gateway's own `/.well-known/oauth-authorization-server`.
+pub const DG_GATEWAY_ROOT: &str = "https://gateway.datagrout.ai";
+
+/// The Quick Connect resource (RFC 8707). One constant URL for every device: the
+/// server is chosen by the person on the consent screen and travels back in the
+/// token's `aud`, rather than being typed in here beforehand.
+///
+/// This is why the URL field could go away. Asking someone to find a server UUID
+/// before they could sign in put the hardest step first, and the answer was already
+/// in the token the flow ends with — `bootstrap_identity` has read it from `aud` all
+/// along, and only cross-checks a `server_uuid` in the body when one is sent.
+pub const DG_CONNECT_RESOURCE: &str = "https://gateway.datagrout.ai/connect";
+
 // ─── Identity ────────────────────────────────────────────────────────────────
 
 /// DG-CA-signed client identity for mTLS.  Loaded from `~/.conduit/` or

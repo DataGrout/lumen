@@ -772,21 +772,29 @@ async fn handle_api_request(
                 let payload: serde_json::Value =
                     serde_json::from_slice(&body_bytes).unwrap_or_default();
 
-                let raw_url = match payload["server_url"].as_str() {
-                    Some(u) if !u.is_empty() => u.trim_end_matches('/').to_string(),
-                    _ => {
-                        return Ok(json_response(
-                            StatusCode::BAD_REQUEST,
-                            &serde_json::json!({"error": "server_url required"}),
-                        ));
+                // No URL means Quick Connect: the user picks the server on the consent
+                // screen rather than finding its UUID first. The resource is a constant,
+                // and the server they choose comes back bound into the token's `aud`,
+                // which `bootstrap_identity` reads — so nothing on this side has to know
+                // which server it is.
+                //
+                // A supplied URL is still honoured, so devices enrolled against a
+                // per-server URL keep working and a self-hosted gateway stays reachable.
+                let (dcr_base, auth_root, resource) = match payload["server_url"].as_str() {
+                    Some(u) if !u.is_empty() => {
+                        // Parse out DCR base (server-level, strip /mcp suffix) and auth root
+                        // (everything before /servers/) so we can handle both root URLs
+                        // (https://datagrout.ai) and per-server MCP URLs
+                        // (https://datagrout.ai/servers/UUID/mcp).
+                        let (base, root) = parse_dg_url(u.trim_end_matches('/'));
+                        (base, root, None)
                     }
+                    _ => (
+                        crate::conduit::DG_GATEWAY_ROOT.to_string(),
+                        crate::conduit::DG_GATEWAY_ROOT.to_string(),
+                        Some(crate::conduit::DG_CONNECT_RESOURCE),
+                    ),
                 };
-
-                // Parse out DCR base (server-level, strip /mcp suffix) and auth root
-                // (everything before /servers/) so we can handle both root URLs
-                // (https://datagrout.ai) and per-server MCP URLs
-                // (https://datagrout.ai/servers/UUID/mcp).
-                let (dcr_base, auth_root) = parse_dg_url(&raw_url);
 
                 let device_name = payload["device_name"]
                     .as_str()
@@ -809,12 +817,15 @@ async fn handle_api_request(
                         let state_param = uuid::Uuid::new_v4().to_string();
 
                         let auth_url = format!(
-                            "{}/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}&scope=mcp",
+                            "{}/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}&scope=mcp{}",
                             auth_root,
                             percent_encode(&client_id),
                             percent_encode(&redirect_uri),
                             percent_encode(&challenge),
                             percent_encode(&state_param),
+                            resource
+                                .map(|r| format!("&resource={}", percent_encode(r)))
+                                .unwrap_or_default(),
                         );
 
                         use crate::state::{DcrFlow, DcrFlowStatus};

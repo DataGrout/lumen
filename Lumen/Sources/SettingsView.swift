@@ -819,7 +819,11 @@ struct SettingsView: View {
 
             if dgState == .disconnected {
                 VStack(spacing: 6) {
-                    TextField("https://…datagrout.ai/servers/UUID/mcp", text: $dgServerURL)
+                    // Optional now. Left blank — which is the normal case — the flow
+                    // uses Quick Connect and the server is chosen on the consent
+                    // screen. It stays for devices already enrolled against a
+                    // per-server URL, and for a self-hosted gateway.
+                    TextField("Server URL (optional)", text: $dgServerURL)
                         .textFieldStyle(.plain)
                         .font(.system(size: 10, design: .monospaced))
                         .padding(.horizontal, 8)
@@ -879,11 +883,12 @@ struct SettingsView: View {
                         .foregroundStyle(.black)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
-                        .background(dgServerURL.isEmpty ? Color.orange.opacity(0.4) : Color.orange)
+                        .background(Color.orange)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
-                    .disabled(dgConnecting || dgServerURL.isEmpty)
+                    // Not gated on the URL any more: empty is the normal case.
+                    .disabled(dgConnecting)
 
                     Button(action: {
                         if let url = URL(string: "https://app.datagrout.ai") {
