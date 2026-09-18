@@ -42,6 +42,12 @@ STOP THE DAEMON: it keeps running in the background after you close the client
 (so it keeps tracking). To stop it cleanly, double-click run-stop.bat (or run
 run.bat -Stop) instead of ending it in Task Manager.
 
+Stopping also clears the persisted proxy variables, so nothing is left pointing
+at a port with nothing behind it. Variables that do not point at Lumen (your own
+corporate or debugging proxy) are left alone. Apps that are already open keep the
+settings they started with - restart them if they still fail. The CA stays
+trusted; run.bat -Cleanup removes that too.
+
 NOTE: "Claude Code" (the CLI installed by claude.ai/install.ps1) and
 "Claude Desktop" (the GUI app) are different products.
 
@@ -60,6 +66,7 @@ This is a man-in-the-middle root CA for your user account - the launcher prints 
 security note when it does it. To skip the CA import:  run.bat -NoTrustCA
 To undo everything (remove the CA + clear the persisted proxy vars):
     run.bat -Cleanup
+The proxy vars alone are cleared whenever you stop the daemon (run-stop.bat).
 
 Verified working: the Claude Desktop "Code" tab tracks in the dashboard. The
 "chat"/"cowork" tabs use a different backend and are not tracked yet.

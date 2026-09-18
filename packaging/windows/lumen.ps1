@@ -114,11 +114,37 @@ function Remove-LumenTrust([string]$CaFile) {
     } else {
         Write-Host "No CA file at $CaFile; skipping cert removal." -ForegroundColor DarkGray
     }
-    foreach ($v in 'HTTPS_PROXY', 'HTTP_PROXY', 'NODE_EXTRA_CA_CERTS') {
-        if ([Environment]::GetEnvironmentVariable($v, 'User')) {
+    Clear-LumenProxyEnv -CaFile $CaFile
+}
+
+# Drop the persisted proxy env, but only where it is still ours.
+#
+# These are set at User scope because a packaged (MSIX) client cannot be handed a
+# custom environment and reads the registry-built block instead. Persisted means
+# they outlive the daemon: stopping Lumen used to leave every env-respecting app
+# on the account pointed at a port with nothing behind it, which looks like the
+# machine is broken and survives reboots, uninstalls and restarts of the client.
+#
+# Ownership is matched on the value, not just the name — the same rule the macOS
+# side applies to the system proxy. A user's own corporate or debugging proxy
+# must never be collateral of stopping ours.
+function Clear-LumenProxyEnv([string]$CaFile) {
+    foreach ($v in 'HTTPS_PROXY', 'HTTP_PROXY') {
+        $current = [Environment]::GetEnvironmentVariable($v, 'User')
+        if ($current -and $current -match '^https?://(127\.0\.0\.1|localhost)[:/]') {
             [Environment]::SetEnvironmentVariable($v, $null, 'User')
             Write-Host "Cleared persisted User env: $v" -ForegroundColor Green
+        } elseif ($current) {
+            Write-Host "Left $v alone - it does not point at Lumen ($current)" -ForegroundColor DarkGray
         }
+    }
+
+    $node = [Environment]::GetEnvironmentVariable('NODE_EXTRA_CA_CERTS', 'User')
+    if ($node -and $CaFile -and $node -eq $CaFile) {
+        [Environment]::SetEnvironmentVariable('NODE_EXTRA_CA_CERTS', $null, 'User')
+        Write-Host "Cleared persisted User env: NODE_EXTRA_CA_CERTS" -ForegroundColor Green
+    } elseif ($node) {
+        Write-Host "Left NODE_EXTRA_CA_CERTS alone - it is not ours ($node)" -ForegroundColor DarkGray
     }
 }
 
@@ -157,6 +183,13 @@ if ($Stop) {
     } catch {
         Write-Host "No running Lumen daemon on API :$ApiPort (it may already be stopped)." -ForegroundColor DarkGray
     }
+
+    # Nothing is listening now, so nothing should still be aimed here. Leaving
+    # these set is what turned "I stopped Lumen" into an account-wide outage.
+    # The CA trust is deliberately left in place - it costs a prompt to restore
+    # and is harmless without a proxy to use it; -Cleanup removes that too.
+    Clear-LumenProxyEnv -CaFile $caPath
+    Write-Host "Apps already running keep the settings they launched with - restart them if they still fail." -ForegroundColor DarkGray
     exit 0
 }
 
