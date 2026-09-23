@@ -64,6 +64,18 @@ const CACHE_READ_MULTIPLIER: f64 = 0.1;
 const CACHE_WRITE_MULTIPLIER: f64 = 1.25;
 
 impl ModelPricing {
+    /// What this model charges for a cache read, as a fraction of its base input.
+    ///
+    /// Read off the stored rates rather than declared separately: a model that
+    /// prices reads differently already says so in `cache_read_per_mtok`, and
+    /// deriving the ratio means there is no second place for it to drift.
+    fn cache_read_ratio(&self) -> f64 {
+        match self.cache_read_per_mtok {
+            Some(read) if self.input_per_mtok > 0.0 => read / self.input_per_mtok,
+            _ => CACHE_READ_MULTIPLIER,
+        }
+    }
+
     /// The four rates that apply at the requested speed: input, output, cache read,
     /// cache write.
     ///
@@ -78,7 +90,13 @@ impl ModelPricing {
                 fast_out,
                 // Derived, not stored: the cache multipliers stack on whichever base
                 // applies, so one number to maintain instead of three that can drift.
-                fast_in * CACHE_READ_MULTIPLIER,
+                //
+                // The read ratio comes from the model rather than the constant. Most
+                // models read cache at 0.1x input, but not all — Opus 5.5 is 0.05x
+                // and the 5.1 pair are 0.025x. Using the constant here would have
+                // billed a fast Opus 5.5 cache read at twice its real rate, on the
+                // line that dominates an agent session.
+                fast_in * self.cache_read_ratio(),
                 fast_in * CACHE_WRITE_MULTIPLIER,
             ),
             _ => (
@@ -118,6 +136,8 @@ impl PricingDatabase {
         // 2.5x sol, so leaving it unpriced costs more than the usual fallback
         // error — the $5/$15 unknown-model rate understates it on both legs.
         db.add("openai", "gpt-6-astra", 10.00, 50.00, Some(1.00), None);
+        db.add("openai", "gpt-6-sol", 2.00, 10.00, Some(0.20), None);
+        db.add("openai", "gpt-6-luna", 0.10, 0.50, Some(0.01), None);
 
         // GPT-5.x family (released 2025-2026)
         // All use 10% cached-input rate. -pro variants must be explicit so they
@@ -239,6 +259,18 @@ impl PricingDatabase {
             Some(0.50),
             Some(6.25),
         );
+        // Opus 5.5 (2026-09) undercuts Opus 5 at $4/$20, and reads cache at 0.05x
+        // base rather than the usual 0.1x — its own footnote on the pricing page,
+        // and the reason the fast-mode cache rate is derived per model.
+        db.add(
+            "anthropic",
+            "claude-opus-5-5",
+            4.00,
+            20.00,
+            Some(0.20),
+            Some(5.00),
+        );
+
         // Opus 5 (2026) is the $5/$25 tier, same as Opus 4.5-4.8.
         db.add(
             "anthropic",
@@ -284,9 +316,11 @@ impl PricingDatabase {
             Some(12.50),
         );
 
-        // Fast mode: a premium tier on Opus 5 and Opus 4.8 only, at $10/$50 against
-        // their standard $5/$25. Same model id on the wire, so the request's
-        // `speed` field is the only thing that distinguishes them.
+        // Fast mode: a premium tier on Opus 5.5, Opus 5 and Opus 4.8 only. Same
+        // model id on the wire, so the request's `speed` field is the only thing
+        // that distinguishes them. Opus 4.7 rejects the parameter and 4.6 accepts
+        // it while billing standard, so neither carries a fast rate.
+        db.set_fast("anthropic", "claude-opus-5-5", 8.00, 40.00);
         db.set_fast("anthropic", "claude-opus-5", 10.00, 50.00);
         db.set_fast("anthropic", "claude-opus-4-8", 10.00, 50.00);
         db.set_fast("anthropic", "claude-opus-4-8-20260528", 10.00, 50.00);
@@ -700,8 +734,7 @@ impl PricingDatabase {
         if let Some(pricing) = pricing {
             // Every rate below comes from here, so fast mode cannot be applied to the
             // base rates and forgotten on the cache lines — which is most of the spend.
-            let (input_rate, output_rate, cache_read_rate, cache_write_rate) =
-                pricing.rates(fast);
+            let (input_rate, output_rate, cache_read_rate, cache_write_rate) = pricing.rates(fast);
 
             let cache_read = cache_read_tokens.unwrap_or(0);
             let cache_create = cache_creation_tokens.unwrap_or(0);
@@ -1100,8 +1133,14 @@ mod tests {
         let db = PricingDatabase::with_defaults();
 
         for model in ["claude-opus-5", "claude-opus-4-8"] {
-            let std_cost =
-                db.calculate_cost(LLMProvider::Anthropic, model, 1_000_000, 1_000_000, None, None);
+            let std_cost = db.calculate_cost(
+                LLMProvider::Anthropic,
+                model,
+                1_000_000,
+                1_000_000,
+                None,
+                None,
+            );
             assert!(
                 (std_cost.input_cost - 5.00).abs() < 0.01
                     && (std_cost.output_cost - 25.00).abs() < 0.01,
@@ -1178,7 +1217,14 @@ mod tests {
         let db = PricingDatabase::with_defaults();
 
         for model in ["claude-fable-5-1", "claude-mythos-5-1"] {
-            let base = db.calculate_cost(LLMProvider::Anthropic, model, 1_000_000, 1_000_000, None, None);
+            let base = db.calculate_cost(
+                LLMProvider::Anthropic,
+                model,
+                1_000_000,
+                1_000_000,
+                None,
+                None,
+            );
             assert!(
                 (base.input_cost - 10.00).abs() < 0.01 && (base.output_cost - 50.00).abs() < 0.01,
                 "{model}: expected $10/$50 base, got {}/{}",
@@ -1186,8 +1232,14 @@ mod tests {
                 base.output_cost
             );
 
-            let cached =
-                db.calculate_cost(LLMProvider::Anthropic, model, 1_000_000, 0, Some(1_000_000), None);
+            let cached = db.calculate_cost(
+                LLMProvider::Anthropic,
+                model,
+                1_000_000,
+                0,
+                Some(1_000_000),
+                None,
+            );
             assert!(
                 (cached.total_cost - 0.25).abs() < 0.01,
                 "{model}: expected $0.25 cache read (0.025x, not the $1.00 that 0.1x would give), got {}",
@@ -1197,8 +1249,14 @@ mod tests {
 
         // And 5.0 keeps the standard 0.1x, so this is a real distinction and not a
         // blanket change to the family.
-        let five =
-            db.calculate_cost(LLMProvider::Anthropic, "claude-fable-5", 1_000_000, 0, Some(1_000_000), None);
+        let five = db.calculate_cost(
+            LLMProvider::Anthropic,
+            "claude-fable-5",
+            1_000_000,
+            0,
+            Some(1_000_000),
+            None,
+        );
         assert!(
             (five.total_cost - 1.00).abs() < 0.01,
             "claude-fable-5 should still read cache at $1.00, got {}",
@@ -1270,6 +1328,81 @@ mod tests {
                 cost.output_cost
             );
         }
+    }
+
+    #[test]
+    fn fast_mode_cache_reads_follow_the_model_not_a_constant() {
+        // Opus 5.5 reads cache at 0.05x base, where Opus 5 and 4.8 use 0.1x. The
+        // fast rate is derived from the base, so a fixed 0.1x here billed a fast
+        // Opus 5.5 cache read at twice its real rate — on the line that is most of
+        // an agent session's tokens.
+        let db = PricingDatabase::with_defaults();
+
+        // 1M cache reads, nothing else, at fast speed.
+        let cost = db.calculate_cost_with_speed(
+            LLMProvider::Anthropic,
+            "claude-opus-5-5",
+            1_000_000,
+            0,
+            Some(1_000_000),
+            None,
+            true,
+        );
+        assert!(
+            (cost.total_cost - 0.40).abs() < 0.001,
+            "fast Opus 5.5 cache read is 0.05x of $8 = $0.40, got {}",
+            cost.total_cost
+        );
+
+        // The 0.1x models are unchanged by the same code path.
+        let opus5 = db.calculate_cost_with_speed(
+            LLMProvider::Anthropic,
+            "claude-opus-5",
+            1_000_000,
+            0,
+            Some(1_000_000),
+            None,
+            true,
+        );
+        assert!(
+            (opus5.total_cost - 1.00).abs() < 0.001,
+            "fast Opus 5 cache read is 0.1x of $10 = $1.00, got {}",
+            opus5.total_cost
+        );
+    }
+
+    #[test]
+    fn opus_5_5_standard_rates() {
+        let db = PricingDatabase::with_defaults();
+        let base = db.calculate_cost(
+            LLMProvider::Anthropic,
+            "claude-opus-5-5",
+            1_000_000,
+            1_000_000,
+            None,
+            None,
+        );
+        assert!((base.input_cost - 4.00).abs() < 0.01, "{}", base.input_cost);
+        assert!(
+            (base.output_cost - 20.00).abs() < 0.01,
+            "{}",
+            base.output_cost
+        );
+
+        // 0.05x, not the 0.1x that would give $0.40.
+        let cached = db.calculate_cost(
+            LLMProvider::Anthropic,
+            "claude-opus-5-5",
+            1_000_000,
+            0,
+            Some(1_000_000),
+            None,
+        );
+        assert!(
+            (cached.total_cost - 0.20).abs() < 0.01,
+            "expected $0.20 for 1M cache reads, got {}",
+            cached.total_cost
+        );
     }
 
     #[test]
