@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Lumen says when nothing is getting through, instead of holding the machine.** The system proxy points every client on the computer at Lumen, and a watchdog re-applied that setting every twenty seconds without ever asking whether a request could actually complete. When the upstream leg broke, browsers and agents broke with it — and the loop undid every attempt to recover: clearing the proxy by hand did not survive the next tick, and restarting Lumen only re-established the same broken state, so the failure looked permanent and unexplained. The daemon now counts what the proxy achieves. A sustained run of failures with nothing getting through turns the menu-bar icon amber and raises a banner naming the error, with a button that takes Lumen out of the path; while it holds, the watchdog stops re-applying the proxy. Any single success clears it, because the question is whether bytes move rather than whether something failed. An existing proxy setting is left in place rather than dropped automatically — silently ending capture is its own surprise, and the menu bar stays reachable even when nothing loads. The banner also says that applications already open keep the settings they launched with, because nothing outside a process can change them.
+- **GPT-6 Astra, Sol and Luna, Gemini 3.8 Flash, and Claude Opus 5.5 are priced.** Each was being costed by the $5/$15 unknown-model fallback, which neither invents spend nor erases it but is wrong in both directions for a frontier model: it understated Astra ($10/$50) on both legs while overstating Luna ($0.10/$0.50) twentyfold. Opus 5.5 reads cache at 0.05x its base input and Gemini 3.8 Flash is on promotional rates that double on 2027-01-01. Verified against the vendor pricing pages.
+
+### Changed
+
+- **Connecting to DataGrout no longer starts with finding a UUID.** The setup asked for a `/servers/UUID/mcp` URL before it would do anything, which put the hardest step first — and the answer was already in the token the flow ends with. Lumen now authorizes against the gateway's Quick Connect resource, so the browser lists the account's servers and the person picks one there. The field stays, optional, for a device already enrolled against a per-server URL and for a self-hosted gateway; supplying one behaves exactly as before.
+
+### Fixed
+
+- **The proxy stopped altering the requests it forwards.** Redirects were followed, so a site redirecting from http to https was served to the client under the original URL — rendering as a 200 with the address bar still on http and still marked insecure, and with links, cookies and mixed-content rules resolving against the wrong origin. A proxy hands the 3xx back instead. Any method the forwarder did not name became GET, so a preflight went upstream as a GET and a HEAD came back with a body, succeeding while breaking the page. Hop-by-hop headers were passed through in both directions, which an origin may reject outright and which described a body this proxy re-frames. The connect phase is now bounded; the whole request deliberately is not, because streamed completions legitimately stay open for minutes.
+- **Proxy errors say what actually failed.** The error page showed only the request error's summary, which names the URL and drops the cause — so a name that does not resolve, a refused connection, a TLS failure and a timeout all read as one identical sentence, and a dead link was indistinguishable from Lumen being at fault. The cause chain is now shown, and the page says plainly that the upstream request failed rather than that anything was refused.
+- **Fast-mode cache reads follow the model rather than a fixed multiplier.** Fast rates are derived from the base rate, and the cache-read multiplier was a constant 0.1x. Opus 5.5 reads at 0.05x, so a fast Opus 5.5 cache read priced at twice its real rate, on the line that is most of an agent session's tokens.
+- **Stopping the Windows daemon takes the proxy pointers with it.** The proxy variables are persisted at user scope because a packaged client cannot be handed a custom environment, which meant they outlived the daemon: stopping Lumen left every environment-respecting application on the account aimed at a port with nothing behind it, surviving reboots and uninstalls until someone knew to run `-Cleanup`. `run-stop.bat` now clears them, matching on the value so a proxy that does not point at Lumen is left alone. The launcher is also kept pure ASCII, which Windows PowerShell 5.1 requires to parse it at all.
+
 ## [0.3.0] — 2026-09-09
 
 ### Added
