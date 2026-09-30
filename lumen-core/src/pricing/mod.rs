@@ -137,6 +137,10 @@ impl PricingDatabase {
         // error — the $5/$15 unknown-model rate understates it on both legs.
         db.add("openai", "gpt-6-astra", 10.00, 50.00, Some(1.00), None);
         db.add("openai", "gpt-6-sol", 2.00, 10.00, Some(0.20), None);
+        // Same $2/$10 as gpt-6-sol but caches at 0.05x rather than 0.1x — the two
+        // must not be fuzzy-matched onto each other, or one of them bills its cache
+        // line at half or double.
+        db.add("openai", "gpt-6.1-sol", 2.00, 10.00, Some(0.10), None);
         db.add("openai", "gpt-6-luna", 0.10, 0.50, Some(0.01), None);
 
         // GPT-5.x family (released 2025-2026)
@@ -259,6 +263,17 @@ impl PricingDatabase {
             Some(0.50),
             Some(6.25),
         );
+        // Sonnet 5.5 (2026-09-28) holds Sonnet 5's $2/$10 and the standard 0.1x cache
+        // read. No fast tier — that is an Opus-only premium.
+        db.add(
+            "anthropic",
+            "claude-sonnet-5-5",
+            2.00,
+            10.00,
+            Some(0.20),
+            Some(2.50),
+        );
+
         // Opus 5.5 (2026-09) undercuts Opus 5 at $4/$20, and reads cache at 0.05x
         // base rather than the usual 0.1x — its own footnote on the pricing page,
         // and the reason the fast-mode cache rate is derived per model.
@@ -1369,6 +1384,42 @@ mod tests {
             "fast Opus 5 cache read is 0.1x of $10 = $1.00, got {}",
             opus5.total_cost
         );
+    }
+
+    #[test]
+    fn sonnet_5_5_and_gpt_6_1_sol_priced() {
+        let db = PricingDatabase::with_defaults();
+        for (provider, model, exp_in, exp_out, exp_cache) in [
+            (
+                LLMProvider::Anthropic,
+                "claude-sonnet-5-5",
+                2.00_f64,
+                10.00_f64,
+                0.20_f64,
+            ),
+            // The trap: identical headline rates to gpt-6-sol, half the cache rate.
+            (LLMProvider::OpenAI, "gpt-6.1-sol", 2.00, 10.00, 0.10),
+            (LLMProvider::OpenAI, "gpt-6-sol", 2.00, 10.00, 0.20),
+        ] {
+            let base = db.calculate_cost(provider, model, 1_000_000, 1_000_000, None, None);
+            assert!(
+                (base.input_cost - exp_in).abs() < 0.001,
+                "{model} input {}",
+                base.input_cost
+            );
+            assert!(
+                (base.output_cost - exp_out).abs() < 0.001,
+                "{model} output {}",
+                base.output_cost
+            );
+
+            let cached = db.calculate_cost(provider, model, 1_000_000, 0, Some(1_000_000), None);
+            assert!(
+                (cached.total_cost - exp_cache).abs() < 0.001,
+                "{model}: expected ${exp_cache} for 1M cache reads, got {}",
+                cached.total_cost
+            );
+        }
     }
 
     #[test]

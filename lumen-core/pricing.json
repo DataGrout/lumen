@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-09-22",
+  "updated": "2026-09-29",
   "notes": {
     "cursor": "Cursor On-Demand effective blended rates, NOT Anthropic/OpenAI direct prices. Cursor caches conversation context very aggressively (>85% hit rate typical), and its binary protobuf responses do not expose cache_read_input_tokens the way the Anthropic JSON API does. BidiAppend calls carrying conversation history are filtered as proxy noise, so byte-estimated tokens are heavily skewed toward output_tokens. These rates are calibrated against observed Cursor On-Demand invoices to land within ~2x of actual billing. If Cursor ever exposes cache-aware token counts in its gRPC responses, raise these toward the underlying Anthropic/OpenAI direct rates.",
     "retired": "Model has been retired from the OpenAI product and/or API. Entries are kept for cost attribution of historical traffic. o1-preview shutdown 2025-07-28; o1-mini shutdown 2025-10-27; entire o-series retired from ChatGPT 2026-02-13 (API access may still function for existing integrations).",
@@ -10,6 +10,8 @@
     "claude_sonnet_5": "Claude Sonnet 5 launched at an introductory $2/$10 through 2026-08-31. Anthropic has since made that the standard price and cancelled the planned rise to $3/$15, so 2.00/10.00 is simply the rate now.",
     "unpriced_variants": "Dated aliases (claude-haiku-4-5-20251001, gpt-4o-2024-08-06, ...) and retired models are kept deliberately: the API reports those ids, and historical events must keep repricing correctly. Removing them sends old traffic to the $5/$15 unknown-model fallback.",
     "opus_55_cache_read": "Claude Opus 5.5 prices cache hits at 0.05x base input ($0.20/MTok), not the 0.1x every other Claude model uses except the 5.1 pair. Verified against the Anthropic pricing docs 2026-09-22, where it carries its own footnote. Fast mode stacks on top: a fast cache read is 0.05x of $8, not 0.1x of $8.",
+    "gpt_61_sol_cache_read": "gpt-6.1-sol prices cached input at $0.10, 0.05x its $2.00 input, where gpt-6-sol at the same $2.00 charges $0.20. Confirmed against the verbatim OpenAI pricing row on 2026-09-29 rather than trusted from a summary.",
+    "trusted_access": "Available only through a vendor trusted-access program. Priced so that traffic which does appear is not costed by the unknown-model fallback. gpt-rosalind-research is stated as billable from 2026-10-05; usage before that is shown at list price.",
     "claude_51_cache_read": "Claude Fable 5.1 and Mythos 5.1 price cache reads at 0.025x base input ($0.25/MTok), not the 0.1x every other Claude model uses. Verified against the Anthropic pricing page 2026-09-01. Do not 'correct' these to $1.00 to match Fable 5 / Mythos 5 \u2014 the difference is deliberate and fourfold on the cache line, which dominates an agent workload.",
     "anthropic_fast_mode": "Anthropic fast mode (`speed: \"fast\"` on the Messages request) is a premium tier on Opus 5 and Opus 4.8 only: $10/$50 against their standard $5/$25. The API reports the same model id either way, so the request field is the only signal. Cache multipliers stack on the fast base (read 0.1x, write 1.25x) and are derived, not stored. Opus 4.6 accepts the parameter and bills standard; Opus 4.7 rejects it."
   },
@@ -246,6 +248,14 @@
       "note": "claude_sonnet_5"
     },
     {
+      "provider": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "input_per_mtok": 2.0,
+      "output_per_mtok": 10.0,
+      "cache_read_per_mtok": 0.2,
+      "cache_write_per_mtok": 2.5
+    },
+    {
       "provider": "cursor",
       "model": "claude-haiku-4",
       "input_per_mtok": 0.16,
@@ -414,6 +424,13 @@
     },
     {
       "provider": "google",
+      "model": "gemini-3.1-pro-preview-customtools",
+      "input_per_mtok": 2.0,
+      "output_per_mtok": 12.0,
+      "cache_read_per_mtok": 0.2
+    },
+    {
+      "provider": "google",
       "model": "gemini-3.5-flash",
       "input_per_mtok": 1.5,
       "output_per_mtok": 9.0,
@@ -450,6 +467,12 @@
     {
       "provider": "google",
       "model": "gemini-omni-1.1-flash",
+      "input_per_mtok": 1.5,
+      "output_per_mtok": 9.0
+    },
+    {
+      "provider": "google",
+      "model": "gemini-omni-flash-preview",
       "input_per_mtok": 1.5,
       "output_per_mtok": 9.0
     },
@@ -678,9 +701,23 @@
     },
     {
       "provider": "openai",
+      "model": "gpt-5.5-cyber",
+      "input_per_mtok": 12.5,
+      "output_per_mtok": 75.0,
+      "cache_read_per_mtok": 1.25
+    },
+    {
+      "provider": "openai",
       "model": "gpt-5.5-pro",
       "input_per_mtok": 30.0,
       "output_per_mtok": 180.0
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-cyber",
+      "input_per_mtok": 12.5,
+      "output_per_mtok": 75.0,
+      "cache_read_per_mtok": 1.25
     },
     {
       "provider": "openai",
@@ -723,6 +760,22 @@
       "input_per_mtok": 2.0,
       "output_per_mtok": 10.0,
       "cache_read_per_mtok": 0.2
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "input_per_mtok": 2.0,
+      "output_per_mtok": 10.0,
+      "cache_read_per_mtok": 0.1,
+      "note": "gpt_61_sol_cache_read"
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-rosalind-research",
+      "input_per_mtok": 5.0,
+      "output_per_mtok": 25.0,
+      "cache_read_per_mtok": 0.5,
+      "note": "trusted_access"
     },
     {
       "provider": "openai",
