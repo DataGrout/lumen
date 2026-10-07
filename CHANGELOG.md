@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file.
 
 - **Claude Sonnet 5.5 and GPT-6.1 Sol are priced, with the specialist models alongside.** Sonnet 5.5 holds Sonnet 5's $2/$10 and the standard cache read. GPT-6.1 Sol matches GPT-6 Sol at $2/$10 but reads cache at 0.05x rather than 0.1x — the two must never be matched onto each other, since one would then bill its cache line at half or double. Also priced: the GPT-5.6 and GPT-5.5 cyber models, GPT Rosalind Research (trusted access only), Gemini Omni Flash Preview and the Gemini 3.1 Pro custom-tools preview. The Gemini live models are left out deliberately: they are priced per audio token or per minute, and a text-only rate would misprice their real traffic. Verified against the vendor pricing pages on 2026-09-29.
 
+### Fixed
+
+- **A downloaded price list can no longer remove a model the app already knows.** A list used to replace the built-in table outright, and the cached list is whatever was last downloaded — usually older than the app reading it. So a new release ignored its own newer prices on every existing install, and a model the list had not caught up with fell back to a guessed rate. Lists are now laid over the built-in table: a stale one can only fail to add a model, while a newer one still adds models and corrects rates.
+
+### Changed
+
+- **The price list refreshes while the daemon runs.** It was fetched once at startup and applied only on the next start, so a daemon left running kept pricing newly released models by fuzzy match for as long as nobody restarted it — weeks, in practice. It is now fetched shortly after startup and every six hours (thirty minutes after a failure) and applied straight away. Costs already recorded keep the rates in force when they happened. A user override at `~/.lumen/pricing.json` still wins.
+
 ## [0.4.0] — 2026-09-22
 
 ### Added
