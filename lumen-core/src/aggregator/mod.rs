@@ -70,7 +70,11 @@ pub struct Aggregator {
     lifetime_stats: RwLock<LifetimeStats>,
     laps: RwLock<Vec<LapSnapshot>>,
     lap_state: RwLock<LapState>,
-    pricing: PricingDatabase,
+    /// Behind a lock so a refreshed price list can be swapped in while the
+    /// daemon runs. It used to be fixed for the life of the process, and the
+    /// list is otherwise only read at startup — so a daemon left running kept
+    /// pricing new models wrongly for as long as nobody restarted it.
+    pricing: RwLock<PricingDatabase>,
 }
 
 #[derive(Debug)]
@@ -108,8 +112,16 @@ impl Aggregator {
             lifetime_stats: RwLock::new(LifetimeStats::default()),
             laps: RwLock::new(Vec::new()),
             lap_state: RwLock::new(LapState::default()),
-            pricing,
+            pricing: RwLock::new(pricing),
         }
+    }
+
+    /// Price everything recorded from now on with `pricing`. Costs already
+    /// computed are left alone: they were right by the list in force when they
+    /// happened, and silently rewriting history would make laps disagree with
+    /// what was shown at the time.
+    pub fn replace_pricing(&self, pricing: PricingDatabase) {
+        *self.pricing.write() = pricing;
     }
 
     pub fn record_usage(&self, provider: LLMProvider, model: &str, url: &str, usage: TokenUsage) {
@@ -120,7 +132,7 @@ impl Aggregator {
         // store, with the disk write debounced to once every fifteen minutes.
         crate::activity::record_capture();
 
-        let cost = self.pricing.calculate_cost_with_speed(
+        let cost = self.pricing.read().calculate_cost_with_speed(
             provider,
             model,
             usage.input_tokens,
@@ -352,6 +364,56 @@ impl Default for Aggregator {
 mod tests {
     use super::*;
     use crate::parser::LLMProvider;
+
+    #[test]
+    fn a_swapped_price_list_reprices_what_comes_next_and_nothing_before() {
+        let one_million_in = || TokenUsage {
+            input_tokens: 1_000_000,
+            output_tokens: 0,
+            total_tokens: 1_000_000,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            fast: false,
+        };
+        let agg = Aggregator::new(PricingDatabase::with_defaults());
+        let url = "https://api.anthropic.com/v1/messages";
+
+        agg.record_usage(
+            LLMProvider::Anthropic,
+            "claude-opus-5",
+            url,
+            one_million_in(),
+        );
+
+        let raised: crate::pricing::PricingFile = serde_json::from_str(
+            r#"{"schema_version": 1, "updated": "2026-01-01", "models": [
+                {"provider": "anthropic", "model": "claude-opus-5",
+                 "input_per_mtok": 6.0, "output_per_mtok": 30.0}
+            ]}"#,
+        )
+        .unwrap();
+        agg.replace_pricing(PricingDatabase::from_file_over_defaults(&raised));
+
+        agg.record_usage(
+            LLMProvider::Anthropic,
+            "claude-opus-5",
+            url,
+            one_million_in(),
+        );
+
+        let events = agg.recent_events(10);
+        let mut costs: Vec<f64> = events.iter().map(|e| e.cost.input_cost).collect();
+        costs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(costs.len(), 2);
+        assert!(
+            (costs[0] - 5.00).abs() < 0.001,
+            "the earlier event keeps its rate: {costs:?}"
+        );
+        assert!(
+            (costs[1] - 6.00).abs() < 0.001,
+            "the later one uses the new list: {costs:?}"
+        );
+    }
 
     fn record_n(agg: &Aggregator, n: usize, model: &str) {
         for _ in 0..n {

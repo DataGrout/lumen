@@ -5,12 +5,21 @@
 //!   2. `~/.lumen/pricing.json.cache`    — last successful remote fetch
 //!   3. Compiled-in defaults             — always available
 //!
-//! On startup, after returning the best available database, a background task
-//! fetches the canonical pricing.json from the repo and writes it to the cache
-//! path so the next restart gets fresh rates — without blocking boot or
-//! requiring a hot-swap of the in-process database.
+//! Every source is laid over the compiled-in defaults rather than replacing
+//! them, so a stale list can fail to add a model but never remove one the
+//! binary already knows — see `PricingDatabase::from_file_over_defaults`.
+//!
+//! Once the aggregator exists, `spawn_refresh_loop` fetches the published list
+//! immediately and then every few hours, writes it to the cache, and swaps it
+//! into the running daemon. It used to be fetched once at startup and applied
+//! only on the next restart, so a daemon left running for weeks priced newly
+//! released models by fuzzy match for as long as nobody restarted it.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::aggregator::Aggregator;
 
 use super::{PricingDatabase, PricingFile};
 
@@ -18,6 +27,14 @@ const REMOTE_URL: &str =
     "https://raw.githubusercontent.com/DataGrout/lumen/main/lumen-core/pricing.json";
 
 const FETCH_TIMEOUT_SECS: u64 = 10;
+
+/// Between successful refreshes. Published prices move on the scale of days, so
+/// this is far more often than the list changes and still one small request.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// After a failed refresh. Short enough that a network that was down when the
+/// daemon started does not leave it stale for a whole interval.
+const RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -55,17 +72,17 @@ fn try_load(path: &PathBuf) -> Option<PricingDatabase> {
             return None;
         }
     };
-    Some(PricingDatabase::from_file(&file))
+    Some(PricingDatabase::from_file_over_defaults(&file))
 }
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Load the best available pricing database synchronously, then spawn a
-/// background task to refresh the cache from the remote URL.
+/// Load the best available pricing database synchronously.
 ///
-/// Call this once at startup before creating the `Aggregator`.
+/// Call this once at startup before creating the `Aggregator`, then hand the
+/// aggregator to `spawn_refresh_loop`.
 pub fn load_pricing() -> PricingDatabase {
     // 1. User override (highest priority — never overwritten by background fetch)
     let override_path = user_override_path();
@@ -75,7 +92,6 @@ pub fn load_pricing() -> PricingDatabase {
                 "pricing: loaded from user override {}",
                 override_path.display()
             );
-            spawn_background_refresh(); // still refresh cache for next boot
             return db;
         }
         tracing::warn!(
@@ -89,7 +105,6 @@ pub fn load_pricing() -> PricingDatabase {
     if cache.exists() {
         if let Some(db) = try_load(&cache) {
             tracing::info!("pricing: loaded from remote cache {}", cache.display());
-            spawn_background_refresh();
             return db;
         }
         tracing::warn!(
@@ -100,32 +115,54 @@ pub fn load_pricing() -> PricingDatabase {
 
     // 3. Compiled-in defaults
     tracing::info!("pricing: using compiled-in defaults (no local file found)");
-    spawn_background_refresh();
     PricingDatabase::with_defaults()
 }
 
-/// Spawn a best-effort background task that fetches the remote pricing file
-/// and writes it to `~/.lumen/pricing.json.cache`.  Failures are logged at
-/// warn level and never panic — the next restart will retry.
-pub fn spawn_background_refresh() {
+/// Keep the running daemon on the published price list.
+///
+/// Fetches immediately, then every `REFRESH_INTERVAL` (or `RETRY_INTERVAL`
+/// after a failure). Each good list is written to the cache for the next start
+/// and swapped into `aggregator` straight away, unless a user override exists —
+/// the override is deliberately the user's to manage, so it keeps winning and the
+/// cache is only kept fresh for when it is removed. Failures are logged and
+/// retried; they never touch the table already in use.
+pub fn spawn_refresh_loop(aggregator: Arc<Aggregator>) {
     tokio::spawn(async move {
-        match fetch_remote().await {
-            Ok(content) => {
-                let path = cache_path();
-                if let Err(e) = std::fs::write(&path, &content) {
-                    tracing::warn!("pricing: failed to write cache {}: {}", path.display(), e);
-                } else {
-                    tracing::info!("pricing: remote cache updated ({})", path.display());
+        // The text last swapped in, so an unchanged list is neither re-applied
+        // nor re-announced every few hours.
+        let mut applied: Option<String> = None;
+
+        loop {
+            let wait = match fetch_remote().await {
+                Ok((text, file)) => {
+                    let path = cache_path();
+                    if let Err(e) = std::fs::write(&path, &text) {
+                        tracing::warn!("pricing: failed to write cache {}: {}", path.display(), e);
+                    }
+
+                    if user_override_path().exists() {
+                        tracing::debug!("pricing: user override present; refreshed cache only");
+                    } else if applied.as_deref() != Some(text.as_str()) {
+                        aggregator.replace_pricing(PricingDatabase::from_file_over_defaults(&file));
+                        tracing::info!(
+                            "pricing: applied published price list (updated {})",
+                            file.updated
+                        );
+                        applied = Some(text);
+                    }
+                    REFRESH_INTERVAL
                 }
-            }
-            Err(e) => {
-                tracing::warn!("pricing: remote refresh failed — {}", e);
-            }
+                Err(e) => {
+                    tracing::warn!("pricing: refresh failed — {}; retrying later", e);
+                    RETRY_INTERVAL
+                }
+            };
+            tokio::time::sleep(wait).await;
         }
     });
 }
 
-async fn fetch_remote() -> anyhow::Result<String> {
+async fn fetch_remote() -> anyhow::Result<(String, PricingFile)> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
         .no_proxy()
@@ -147,5 +184,5 @@ async fn fetch_remote() -> anyhow::Result<String> {
         anyhow::bail!("unsupported schema_version {}", file.schema_version);
     }
 
-    Ok(text)
+    Ok((text, file))
 }

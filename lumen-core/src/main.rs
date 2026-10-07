@@ -130,6 +130,7 @@ async fn main() {
     // so idleness is measured across restarts rather than from this one.
     activity::install();
     let aggregator = Arc::new(aggregator::Aggregator::new(pricing));
+    pricing::loader::spawn_refresh_loop(aggregator.clone());
 
     let ca = ca::LumenCA::load_or_generate().expect("Failed to initialize CA");
     tracing::info!(

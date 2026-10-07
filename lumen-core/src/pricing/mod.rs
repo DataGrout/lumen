@@ -609,6 +609,23 @@ impl PricingDatabase {
 
     /// Build a database from a parsed JSON pricing file.
     /// Falls back to `with_defaults()` and logs a warning if schema_version is unsupported.
+    /// The built-in table with a price list laid over it: an entry in the list
+    /// wins, and anything the list lacks keeps its built-in rate.
+    ///
+    /// `from_file` on its own replaces the built-in table, which let any list
+    /// remove models the binary already knows. The cached list is whatever was
+    /// last downloaded, so it routinely predates the binary reading it — a new
+    /// build then ignored its own newer table on every existing install, and a
+    /// periodic refresh would have actively downgraded it whenever the published
+    /// list lagged a release. Laying the list over the defaults means a stale list
+    /// can only fail to add, never take away, while a newer one still adds models
+    /// and corrects rates.
+    pub fn from_file_over_defaults(file: &PricingFile) -> Self {
+        let mut db = Self::with_defaults();
+        db.models.extend(Self::from_file(file).models);
+        db
+    }
+
     pub fn from_file(file: &PricingFile) -> Self {
         if file.schema_version != 1 {
             tracing::warn!(
@@ -1474,6 +1491,75 @@ mod tests {
                 cached.total_cost
             );
         }
+    }
+
+    fn stale_list() -> PricingFile {
+        // A list that knows one model, and prices it differently from the binary.
+        serde_json::from_str(
+            r#"{"schema_version": 1, "updated": "2026-01-01", "models": [
+                {"provider": "anthropic", "model": "claude-opus-5",
+                 "input_per_mtok": 6.0, "output_per_mtok": 30.0,
+                 "cache_read_per_mtok": 0.6, "cache_write_per_mtok": 7.5}
+            ]}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_stale_list_cannot_remove_a_model_the_binary_knows() {
+        let file = stale_list();
+
+        // The hazard being closed: the list alone has never heard of Opus 5.5, so
+        // it falls through to fuzzy matching and is priced as Opus 5 at the
+        // list's rate — not its own.
+        let alone = PricingDatabase::from_file(&file);
+        let as_list = alone.calculate_cost(
+            LLMProvider::Anthropic,
+            "claude-opus-5-5",
+            1_000_000,
+            0,
+            None,
+            None,
+        );
+        assert!(
+            (as_list.input_cost - 4.00).abs() > 0.01,
+            "the list on its own should not know Opus 5.5"
+        );
+
+        // Laid over the defaults, the binary's own entry survives.
+        let merged = PricingDatabase::from_file_over_defaults(&file);
+        let cost = merged.calculate_cost(
+            LLMProvider::Anthropic,
+            "claude-opus-5-5",
+            1_000_000,
+            0,
+            None,
+            None,
+        );
+        assert!(
+            (cost.input_cost - 4.00).abs() < 0.001,
+            "got {}",
+            cost.input_cost
+        );
+    }
+
+    #[test]
+    fn a_list_still_overrides_a_built_in_rate() {
+        // A correction published in the list has to win, or the list is pointless.
+        let merged = PricingDatabase::from_file_over_defaults(&stale_list());
+        let cost = merged.calculate_cost(
+            LLMProvider::Anthropic,
+            "claude-opus-5",
+            1_000_000,
+            0,
+            None,
+            None,
+        );
+        assert!(
+            (cost.input_cost - 6.00).abs() < 0.001,
+            "got {}",
+            cost.input_cost
+        );
     }
 
     #[test]
