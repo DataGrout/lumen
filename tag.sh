@@ -61,8 +61,9 @@ else
     sed -i '' "s/^version = \"$CURRENT\"/version = \"$VERSION\"/" "$CARGO_TOML"
 fi
 
-# Regenerate Cargo.lock so it reflects the new version
-(cd lumen-core && cargo generate-lockfile 2>/dev/null) || true
+# Refresh only our own entry in Cargo.lock. `generate-lockfile` re-resolved every
+# dependency, so each release quietly upgraded whatever had a newer semver match.
+(cd lumen-core && cargo update --workspace 2>/dev/null) || true
 
 # -- 2. App version ------------------------------------------------------------
 #
@@ -120,8 +121,10 @@ fi
 
 # -- Tag and push --------------------------------------------------------------
 
+# Annotated, with its message given here: with `tag.gpgsign` set, a bare
+# `git tag` becomes a signed tag and stops to ask for a message.
 echo "Creating tag $TAG..."
-git tag "$TAG"
+git tag -a "$TAG" -m "Lumen $VERSION"
 
 echo "Pushing commit and tag..."
 git push
