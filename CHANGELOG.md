@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Claude Haiku 5.5 is priced.** It is priced by prompt length: $0.10 input / $0.50 output with a $0.01 cache read up to 100,000 prompt tokens, and five times that above. The table has no prompt-length tiers yet, so it carries the short-prompt rates and a request with a longer prompt is understated. Until now Haiku 5.5 traffic fell to a fuzzy match on an older Haiku and was costed at roughly ten times its price.
+
+### Fixed
+
+- **Sonnet 5.5 cache reads cost half what they did.** Sonnet 5.5 reads cache at 0.05x its base input, like Opus 5.5, not the standard 0.1x — $0.10 per million rather than $0.20. Cache reads are most of an agent session's tokens, so this was overstating Sonnet 5.5 spend by around a quarter. Verified against the vendor pricing pages on 2026-10-13.
+
 ## [0.4.1] — 2026-10-07
 
 ### Added

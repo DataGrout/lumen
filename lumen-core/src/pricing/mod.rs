@@ -263,15 +263,26 @@ impl PricingDatabase {
             Some(0.50),
             Some(6.25),
         );
-        // Sonnet 5.5 (2026-09-28) holds Sonnet 5's $2/$10 and the standard 0.1x cache
-        // read. No fast tier — that is an Opus-only premium.
+        // Sonnet 5.5 (2026-09-28) holds Sonnet 5's $2/$10 but reads cache at 0.05x, like
+        // Opus 5.5. No fast tier — that is an Opus-only premium.
         db.add(
             "anthropic",
             "claude-sonnet-5-5",
             2.00,
             10.00,
-            Some(0.20),
+            Some(0.10),
             Some(2.50),
+        );
+        // Haiku 5.5 (2026-10-07) is priced by prompt length: these are the rates up to
+        // 100k prompt tokens. Above that every rate is 5x ($0.50/$2.50). The table has no
+        // prompt-length tiers, so a long-prompt request is understated.
+        db.add(
+            "anthropic",
+            "claude-haiku-5-5",
+            0.10,
+            0.50,
+            Some(0.01),
+            Some(0.125),
         );
 
         // Opus 5.5 (2026-09) undercuts Opus 5 at $4/$20, and reads cache at 0.05x
@@ -1412,8 +1423,9 @@ mod tests {
                 "claude-sonnet-5-5",
                 2.00_f64,
                 10.00_f64,
-                0.20_f64,
+                0.10_f64,
             ),
+            (LLMProvider::Anthropic, "claude-haiku-5-5", 0.10, 0.50, 0.01),
             // The trap: identical headline rates to gpt-6-sol, half the cache rate.
             (LLMProvider::OpenAI, "gpt-6.1-sol", 2.00, 10.00, 0.10),
             (LLMProvider::OpenAI, "gpt-6-sol", 2.00, 10.00, 0.20),
