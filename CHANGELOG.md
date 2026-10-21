@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **The DataGrout certificate renews before it expires.** The device certificate lasts 30 days and is meant to be renewed in its last week, but the renewal authenticated with the certificate alone, and client certificates do not reach the gateway through the CDN in front of it — so every renewal was refused and each device ran to expiry, showing "DataGrout session expired". Renewal now sends the device's sync token as well, the same credential the recovery path after expiry already uses.
+
 ## [0.4.2] — 2026-10-13
 
 ### Added

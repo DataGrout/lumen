@@ -356,11 +356,15 @@ impl DGSyncer {
         }
 
         if id.needs_rotation(ROTATE_THRESHOLD) {
-            // Still valid but nearing expiry — rotate proactively over mTLS.
+            // Still valid but nearing expiry — rotate proactively, with the sync token
+            // alongside the cert (see `rotate_identity`).
             let url = self.server_url.read().clone();
+            let sub_id = self.lumen_sub_id.read().clone();
+            let token = self.sync_token.read().clone();
             if let Some(url) = url {
                 let gateway_root = Self::gateway_root(&url);
-                match crate::conduit::rotate_identity(&id, &gateway_root).await {
+                let bearer = sub_id.as_deref().zip(token.as_deref());
+                match crate::conduit::rotate_identity(&id, &gateway_root, bearer).await {
                     Ok(new_id) => {
                         let new_expiry = new_id
                             .cert_not_after()

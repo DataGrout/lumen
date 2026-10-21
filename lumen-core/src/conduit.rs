@@ -221,17 +221,22 @@ pub fn bearer_only_client() -> Result<reqwest::Client> {
         .context("failed to build bearer-only reqwest client")
 }
 
-/// Rotate the current identity over mTLS: generate a new keypair, present the
-/// *current* (still-valid) cert to the DG `/rotate` endpoint, and receive a
-/// fresh DG-signed cert. Must be called while the current cert is still valid —
-/// `/rotate` requires a live cert fingerprint and rejects bearer-only auth, so
-/// an already-expired cert cannot rotate itself (that path needs a reconnect).
+/// Rotate the current identity before it expires: generate a new keypair, present
+/// the *current* (still-valid) cert to the DG `/rotate` endpoint, and receive a
+/// fresh DG-signed cert.
+///
+/// `sync_bearer` is the device's `(sub_id, sync_token)`, sent alongside the cert.
+/// The cert alone never authenticated in production: client certs do not reach
+/// the gateway through the CDN in front of it, so every proactive rotation was
+/// refused and each device ran to expiry. The gateway checks a cert first when one
+/// arrives and the sync token otherwise.
 ///
 /// `gateway_root` is the API origin (e.g. `https://gateway.datagrout.ai`),
 /// not the per-server MCP URL.
 pub async fn rotate_identity(
     current: &ConduitIdentity,
     gateway_root: &str,
+    sync_bearer: Option<(&str, &str)>,
 ) -> Result<ConduitIdentity> {
     let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
         .context("rotation keypair generation failed")?;
@@ -257,12 +262,7 @@ pub async fn rotate_identity(
         gateway_root.trim_end_matches('/')
     );
 
-    let resp = client
-        .post(&endpoint)
-        .json(&serde_json::json!({
-            "public_key_pem": pub_key_pem,
-            "name": name,
-        }))
+    let resp = rotation_request(&client, &endpoint, &pub_key_pem, &name, sync_bearer)
         .send()
         .await
         .context("rotation request failed")?;
@@ -299,6 +299,26 @@ pub async fn rotate_identity(
     })
 }
 
+/// The `/rotate` request, shared by rotation and reissue so the two cannot drift
+/// apart on how they authenticate.
+fn rotation_request(
+    client: &reqwest::Client,
+    endpoint: &str,
+    pub_key_pem: &str,
+    name: &str,
+    sync_bearer: Option<(&str, &str)>,
+) -> reqwest::RequestBuilder {
+    let req = client.post(endpoint).json(&serde_json::json!({
+        "public_key_pem": pub_key_pem,
+        "name": name,
+    }));
+
+    match sync_bearer {
+        Some((sub_id, token)) => req.bearer_auth(format!("lm_{}.{}", sub_id, token)),
+        None => req,
+    }
+}
+
 /// Reissue the identity over the sync-token bearer (no client cert), for the
 /// case where the current cert has already EXPIRED and so can't be presented
 /// over mTLS. Hits the same `/rotate` endpoint but authenticates with the
@@ -333,16 +353,16 @@ pub async fn reissue_identity_via_sync_token(
         gateway_root.trim_end_matches('/')
     );
 
-    let resp = client
-        .post(&endpoint)
-        .bearer_auth(format!("lm_{}.{}", sub_id, sync_token))
-        .json(&serde_json::json!({
-            "public_key_pem": pub_key_pem,
-            "name": name,
-        }))
-        .send()
-        .await
-        .context("reissue request failed")?;
+    let resp = rotation_request(
+        &client,
+        &endpoint,
+        &pub_key_pem,
+        &name,
+        Some((sub_id, sync_token)),
+    )
+    .send()
+    .await
+    .context("reissue request failed")?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -699,4 +719,35 @@ fn base64_encode_chunks(data: &[u8]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn built(sync_bearer: Option<(&str, &str)>) -> reqwest::Request {
+        rotation_request(
+            &reqwest::Client::new(),
+            "https://gateway.example.invalid/api/v1/substrate/identity/rotate",
+            "PEM",
+            "lumen-device",
+            sync_bearer,
+        )
+        .build()
+        .unwrap()
+    }
+
+    #[test]
+    fn rotation_sends_the_sync_token_so_it_authenticates_without_a_client_cert() {
+        let req = built(Some(("sub_abc", "deadbeef")));
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer lm_sub_abc.deadbeef"
+        );
+    }
+
+    #[test]
+    fn rotation_without_a_sync_token_sends_no_authorization_header() {
+        assert!(built(None).headers().get("authorization").is_none());
+    }
 }
