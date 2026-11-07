@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **GPT-6.1 Terra, Gemini 4 Argon and Composer 2.5 are priced.** GPT-6.1 Terra is $1 input / $5 output with a $0.05 cache read, the same 0.05x cache rate as GPT-6.1 Sol. Gemini 4 Argon is $2 / $10 with a $0.10 cache read through November 30; Google doubles every rate on December 1, and the price list will change with it. Until now both were costed at the $5 / $15 rate used for unknown models. Composer 2.5 has the same list price as Composer 2 and is now costed at the same calibrated rate; its name did not match the Composer 2 entry, so it was falling to the generic Cursor rate, five times higher.
+
+- **More specialist models are priced:** GPT-6 Cyber ($20 / $100), GPT-6 Rosalind ($15 / $75) and GPT Rosalind Discovery ($5 / $25), the last two available only through a trusted-access program, and Gemini Omni 1.2 Flash ($1.50 / $9 for text).
+
 ### Fixed
 
 - **The DataGrout certificate renews before it expires.** The device certificate lasts 30 days and is meant to be renewed in its last week, but the renewal authenticated with the certificate alone, and client certificates do not reach the gateway through the CDN in front of it — so every renewal was refused and each device ran to expiry, showing "DataGrout session expired". Renewal now sends the device's sync token as well, the same credential the recovery path after expiry already uses.

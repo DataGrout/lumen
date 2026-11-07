@@ -141,6 +141,7 @@ impl PricingDatabase {
         // must not be fuzzy-matched onto each other, or one of them bills its cache
         // line at half or double.
         db.add("openai", "gpt-6.1-sol", 2.00, 10.00, Some(0.10), None);
+        db.add("openai", "gpt-6.1-terra", 1.00, 5.00, Some(0.05), None);
         db.add("openai", "gpt-6-luna", 0.10, 0.50, Some(0.01), None);
 
         // GPT-5.x family (released 2025-2026)
@@ -487,6 +488,9 @@ impl PricingDatabase {
         // (1.50 / 7.50 / 0.15). A static default cannot time-gate, so this needs
         // revisiting in January — see the `gemini_promotional` note in pricing.json.
         db.add("google", "gemini-3.8-flash", 0.75, 3.75, Some(0.075), None);
+        // Promotional through 2026-11-30; every rate doubles on 2026-12-01 (4.00 /
+        // 20.00 / 0.20). Caches at 0.05x, not the 0.1x of the rest of the family.
+        db.add("google", "gemini-4-argon", 2.00, 10.00, Some(0.10), None);
         db.add("google", "gemini-3.6-flash", 0.75, 3.75, Some(0.075), None);
         db.add("google", "gemini-3.5-flash", 1.50, 9.00, Some(0.15), None);
         db.add(
@@ -603,6 +607,9 @@ impl PricingDatabase {
         // composer-2-fast invoices around $0.75/MTok blended.
         db.add("cursor", "composer-2", 0.10, 0.50, None, None);
         db.add("cursor", "composer-2-fast", 0.10, 0.50, None, None);
+        // Same list price as composer-2, so the same calibration. It needs its own
+        // row: the fuzzy match only extends a name past a '-', not a '.'.
+        db.add("cursor", "composer-2.5", 0.10, 0.50, None, None);
 
         // OpenAI models routed through Cursor — calibrated similarly.
         db.add("cursor", "gpt-5.5", 0.20, 1.00, Some(0.02), None);
@@ -1483,6 +1490,41 @@ mod tests {
             "expected $0.20 for 1M cache reads, got {}",
             cached.total_cost
         );
+    }
+
+    #[test]
+    fn gpt_6_1_terra_gemini_4_argon_and_composer_2_5_priced() {
+        let db = PricingDatabase::with_defaults();
+        for (provider, model, exp_in, exp_out, exp_cache) in [
+            (
+                LLMProvider::OpenAI,
+                "gpt-6.1-terra",
+                1.00_f64,
+                5.00_f64,
+                0.05_f64,
+            ),
+            (LLMProvider::Google, "gemini-4-argon", 2.00, 10.00, 0.10),
+            (LLMProvider::Cursor, "composer-2.5", 0.10, 0.50, 0.10),
+            (LLMProvider::Cursor, "composer-2.5-fast", 0.10, 0.50, 0.10),
+        ] {
+            let base = db.calculate_cost(provider, model, 1_000_000, 1_000_000, None, None);
+            assert!(
+                (base.input_cost - exp_in).abs() < 0.001,
+                "{model} input {}",
+                base.input_cost
+            );
+            assert!(
+                (base.output_cost - exp_out).abs() < 0.001,
+                "{model} output {}",
+                base.output_cost
+            );
+            let cached = db.calculate_cost(provider, model, 1_000_000, 0, Some(1_000_000), None);
+            assert!(
+                (cached.total_cost - exp_cache).abs() < 0.001,
+                "{model} cache read {}",
+                cached.total_cost
+            );
+        }
     }
 
     #[test]
