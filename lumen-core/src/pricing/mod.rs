@@ -343,7 +343,8 @@ impl PricingDatabase {
             Some(12.50),
         );
 
-        // Fast mode: a premium tier on Opus 5.5, Opus 5 and Opus 4.8 only. Same
+        // Fast mode: a premium tier on Opus 5.5, Opus 5 and Opus 4.8 (and Fable /
+        // Mythos 5.2, set with their rows below). Same
         // model id on the wire, so the request's `speed` field is the only thing
         // that distinguishes them. Opus 4.7 rejects the parameter and 4.6 accepts
         // it while billing standard, so neither carries a fast rate.
@@ -373,6 +374,14 @@ impl PricingDatabase {
             Some(0.25),
             Some(12.50),
         );
+
+        // Fable 5.2 / Mythos 5.2 (2026-11): cheaper than 5.1 at $8/$40 with the same
+        // 0.025x cache read ($0.20). Without their own rows they fuzzy-match onto
+        // Fable 5 / Mythos 5 and read cache at $1.00 — five times the real rate.
+        for model in ["claude-fable-5-2", "claude-mythos-5-2"] {
+            db.add("anthropic", model, 8.00, 40.00, Some(0.20), Some(10.00));
+            db.set_fast("anthropic", model, 16.00, 80.00);
+        }
 
         // Sonnet 4 family — $3/$15 tier
         db.add(
@@ -491,6 +500,7 @@ impl PricingDatabase {
         // Promotional through 2026-11-30; every rate doubles on 2026-12-01 (4.00 /
         // 20.00 / 0.20). Caches at 0.05x, not the 0.1x of the rest of the family.
         db.add("google", "gemini-4-argon", 2.00, 10.00, Some(0.10), None);
+        db.add("google", "gemini-4-carbon", 2.00, 10.00, Some(0.10), None);
         db.add("google", "gemini-3.6-flash", 0.75, 3.75, Some(0.075), None);
         db.add("google", "gemini-3.5-flash", 1.50, 9.00, Some(0.15), None);
         db.add(
@@ -1312,6 +1322,56 @@ mod tests {
             "claude-fable-5 should still read cache at $1.00, got {}",
             five.total_cost
         );
+    }
+
+    #[test]
+    fn fable_5_2_is_priced_on_its_own_row_not_fable_5() {
+        let db = PricingDatabase::with_defaults();
+        for model in ["claude-fable-5-2", "claude-mythos-5-2"] {
+            let base = db.calculate_cost(
+                LLMProvider::Anthropic,
+                model,
+                1_000_000,
+                1_000_000,
+                None,
+                None,
+            );
+            assert!(
+                (base.input_cost - 8.00).abs() < 0.01 && (base.output_cost - 40.00).abs() < 0.01,
+                "{model}: expected $8/$40 base, got {}/{}",
+                base.input_cost,
+                base.output_cost
+            );
+            let cached = db.calculate_cost(
+                LLMProvider::Anthropic,
+                model,
+                1_000_000,
+                0,
+                Some(1_000_000),
+                None,
+            );
+            assert!(
+                (cached.total_cost - 0.20).abs() < 0.01,
+                "{model}: expected $0.20 cache read, not Fable 5's $1.00, got {}",
+                cached.total_cost
+            );
+            // Fast mode doubles the base, and the 0.025x read ratio stacks on it.
+            let fast = db.calculate_cost_with_speed(
+                LLMProvider::Anthropic,
+                model,
+                1_000_000,
+                1_000_000,
+                Some(1_000_000),
+                None,
+                true,
+            );
+            assert!(
+                (fast.output_cost - 80.00).abs() < 0.01 && (fast.input_cost - 0.40).abs() < 0.01,
+                "{model}: expected $80 fast output and a $0.40 fast cache read, got {}/{}",
+                fast.output_cost,
+                fast.input_cost
+            );
+        }
     }
 
     #[test]

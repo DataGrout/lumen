@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Claude Fable 5.2 and Mythos 5.2 are priced at their own rates.** Both are $8 input / $40 output with a $0.20 cache read, and $16 / $80 in fast mode. Until now they matched the Fable 5 / Mythos 5 entry and were costed at $10 / $50 with a $1.00 cache read — five times the real cache rate, on the line that is most of an agent session's tokens.
+
+### Added
+
+- **Gemini 4 Carbon is priced** at the same promotional $2 / $10 with a $0.10 cache read as Gemini 4 Argon, which also doubles on December 1.
+
 ## [0.4.3] — 2026-11-06
 
 ### Added
